@@ -1,112 +1,153 @@
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+import psycopg2
 import json
-import os
+import pandas as pd
+from datetime import datetime
 
-def generate_logistics_data():
-    """Генерация тестовых данных для логистической системы"""
-    np.random.seed(42)
+def setup_postgres_database():
+    """Настройка PostgreSQL и загрузка данных"""
     
-    # Параметры данных
-    n_shipments = 100000
-    n_warehouses = 100
-    n_routes = 500
-    
-    print("📊 Генерация логистических данных...")
-    
-    # Генерация складов
-    cities = ['Москва', 'Санкт-Петербург', 'Новосибирск', 'Екатеринбург', 'Казань']
-    warehouse_types = ['Центральный', 'Региональный', 'Локальный', 'Транзитный']
-    
-    warehouses_data = []
-    for i in range(n_warehouses):
-        warehouses_data.append({
-            'id': i,
-            'name': f"Склад_{i:03d}",
-            'city': np.random.choice(cities),
-            'type': np.random.choice(warehouse_types),
-            'capacity': np.random.randint(1000, 50000),
-            'employees': np.random.randint(5, 200),
-            'latitude': round(np.random.uniform(55.0, 58.0), 6),
-            'longitude': round(np.random.uniform(37.0, 40.0), 6)
-        })
-    
-    # Генерация маршрутов
-    transport_types = ['Грузовик', 'Фура', 'Рефрижератор', 'Контейнеровоз']
-    
-    routes_data = []
-    for i in range(n_routes):
-        start_city = np.random.choice(cities)
-        end_city = np.random.choice([c for c in cities if c != start_city])
-        distance = np.random.randint(100, 2000)
-        
-        routes_data.append({
-            'id': i,
-            'name': f"Маршрут_{i:03d}: {start_city}-{end_city}",
-            'start_city': start_city,
-            'end_city': end_city,
-            'distance': distance,
-            'duration_hours': distance // 60,
-            'transport_type': np.random.choice(transport_types),
-            'status': np.random.choice(['Активен', 'Неактивен'], p=[0.8, 0.2]),
-            'cost_per_km': round(np.random.uniform(10, 50), 2)
-        })
-    
-    # Генерация грузов
-    start_date = datetime(2023, 1, 1)
-    shipment_statuses = ['В обработке', 'В пути', 'Доставлен', 'Задержан']
-    
-    shipments_data = []
-    for i in range(n_shipments):
-        warehouse_from = np.random.randint(0, n_warehouses)
-        warehouse_to = np.random.randint(0, n_warehouses)
-        
-        while warehouse_to == warehouse_from:
-            warehouse_to = np.random.randint(0, n_warehouses)
-        
-        shipments_data.append({
-            'id': i,
-            'tracking_number': f"TRK{i:08d}",
-            'warehouse_from_id': warehouse_from,
-            'warehouse_to_id': warehouse_to,
-            'route_id': np.random.randint(0, n_routes),
-            'weight': round(np.random.uniform(1, 1000), 2),
-            'volume': round(np.random.uniform(0.1, 10), 2),
-            'value': round(np.random.uniform(100, 50000), 2),
-            'shipment_date': (start_date + timedelta(days=np.random.randint(0, 365))).isoformat(),
-            'delivery_date': (start_date + timedelta(days=np.random.randint(1, 380))).isoformat(),
-            'status': np.random.choice(shipment_statuses, p=[0.2, 0.3, 0.4, 0.1]),
-            'type': np.random.choice(['Хрупкий', 'Опасный', 'Скоропортящийся', 'Обычный']),
-            'priority': np.random.choice(['Низкий', 'Средний', 'Высокий'], p=[0.6, 0.3, 0.1])
-        })
-    
-    # Сохранение в JSON
-    data = {
-        'metadata': {
-            'generated_at': datetime.now().isoformat(),
-            'n_shipments': n_shipments,
-            'n_warehouses': n_warehouses,
-            'n_routes': n_routes
-        },
-        'warehouses': warehouses_data,
-        'routes': routes_data,
-        'shipments': shipments_data
+    # Параметры подключения
+    conn_params = {
+        "dbname": "studpg",
+        "user": "student", 
+        "password": "Stud2024!!!",
+        "host": "postgresql",
+        "port": "5432"
     }
     
-    os.makedirs('data', exist_ok=True)
-    with open('data/01_generated_data.json', 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    
-    print("✅ Данные сгенерированы и сохранены в data/01_generated_data.json")
-    
-    # Статистика
-    print(f"📦 Сгенерировано:")
-    print(f"   - Склады: {len(warehouses_data):,}")
-    print(f"   - Маршруты: {len(routes_data):,}")
-    print(f"   - Грузы: {len(shipments_data):,}")
-    
-    return data
+    try:
+        # Подключение к PostgreSQL
+        conn = psycopg2.connect(**conn_params)
+        print("✅ Успешное подключение к PostgreSQL")
+        
+        # Загрузка сгенерированных данных
+        with open('data/01_generated_data.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Создание таблиц
+        with conn.cursor() as cur:
+            # Удаление существующих таблиц
+            cur.execute("DROP TABLE IF EXISTS shipments CASCADE")
+            cur.execute("DROP TABLE IF EXISTS routes CASCADE") 
+            cur.execute("DROP TABLE IF EXISTS warehouses CASCADE")
+            
+            # Создание таблицы складов
+            cur.execute("""
+                CREATE TABLE warehouses (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR(100),
+                    city VARCHAR(50),
+                    type VARCHAR(50),
+                    capacity INTEGER,
+                    employees INTEGER,
+                    latitude DECIMAL(10,6),
+                    longitude DECIMAL(10,6)
+                )
+            """)
+            
+            # Создание таблицы маршрутов
+            cur.execute("""
+                CREATE TABLE routes (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR(100),
+                    start_city VARCHAR(50),
+                    end_city VARCHAR(50),
+                    distance INTEGER,
+                    duration_hours INTEGER,
+                    transport_type VARCHAR(50),
+                    status VARCHAR(50),
+                    cost_per_km DECIMAL(10,2)
+                )
+            """)
+            
+            # Создание таблицы грузов
+            cur.execute("""
+                CREATE TABLE shipments (
+                    id INTEGER PRIMARY KEY,
+                    tracking_number VARCHAR(20) UNIQUE,
+                    warehouse_from_id INTEGER REFERENCES warehouses(id),
+                    warehouse_to_id INTEGER REFERENCES warehouses(id),
+                    route_id INTEGER REFERENCES routes(id),
+                    weight DECIMAL(10,2),
+                    volume DECIMAL(10,2),
+                    value DECIMAL(10,2),
+                    shipment_date TIMESTAMP,
+                    delivery_date TIMESTAMP,
+                    status VARCHAR(50),
+                    type VARCHAR(50),
+                    priority VARCHAR(20)
+                )
+            """)
+            
+            print("✅ Таблицы созданы")
+        
+        # Загрузка данных
+        print("📥 Загрузка данных в PostgreSQL...")
+        
+        # Загрузка складов
+        with conn.cursor() as cur:
+            for warehouse in data['warehouses']:
+                cur.execute("""
+                    INSERT INTO warehouses VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (warehouse['id'], warehouse['name'], warehouse['city'], 
+                      warehouse['type'], warehouse['capacity'], warehouse['employees'],
+                      warehouse['latitude'], warehouse['longitude']))
+        
+        # Загрузка маршрутов
+        with conn.cursor() as cur:
+            for route in data['routes']:
+                cur.execute("""
+                    INSERT INTO routes VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (route['id'], route['name'], route['start_city'], route['end_city'],
+                      route['distance'], route['duration_hours'], route['transport_type'],
+                      route['status'], route['cost_per_km']))
+        
+        # Загрузка грузов
+        with conn.cursor() as cur:
+            for shipment in data['shipments']:
+                cur.execute("""
+                    INSERT INTO shipments VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (shipment['id'], shipment['tracking_number'], shipment['warehouse_from_id'],
+                      shipment['warehouse_to_id'], shipment['route_id'], shipment['weight'],
+                      shipment['volume'], shipment['value'], shipment['shipment_date'],
+                      shipment['delivery_date'], shipment['status'], shipment['type'],
+                      shipment['priority']))
+        
+        conn.commit()
+        print("✅ Данные загружены в PostgreSQL")
+        
+        # Получение размера базы данных
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_size_pretty(pg_database_size('studpg'))")
+            db_size = cur.fetchone()[0]
+        
+        # Сохранение метаданных
+        postgres_metadata = {
+            'setup_time': datetime.now().isoformat(),
+            'tables_created': ['warehouses', 'routes', 'shipments'],
+            'records_loaded': {
+                'warehouses': len(data['warehouses']),
+                'routes': len(data['routes']), 
+                'shipments': len(data['shipments'])
+            },
+            'database_size': db_size,
+            'indexes_created': [
+                'PRIMARY KEY на всех таблицах',
+                'UNIQUE на tracking_number'
+            ]
+        }
+        
+        with open('data/02_postgres_metadata.json', 'w', encoding='utf-8') as f:
+            json.dump(postgres_metadata, f, ensure_ascii=False, indent=2)
+        
+        print(f"💾 Размер базы данных: {db_size}")
+        print("✅ Метаданные сохранены в data/02_postgres_metadata.json")
+        
+        conn.close()
+        
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        return None
 
 if __name__ == "__main__":
-    generate_logistics_data()
+    setup_postgres_database()
