@@ -1,61 +1,268 @@
-import subprocess
-import sys
-import os
+import psycopg2
+from pymongo import MongoClient
+import time
+import json
+from datetime import datetime
 
-def run_etap(etap_number, script_name, description=""):
-    """Запуск конкретного этапа"""
-    print(f"\n{'='*60}")
-    print(f"🚀 ЭТАП {etap_number}: {description}")
-    print(f"📝 Скрипт: {script_name}")
-    print(f"{'='*60}")
-    
+def check_mongo_connection(client):
+    """Проверка подключения к MongoDB"""
     try:
-        result = subprocess.run([sys.executable, script_name], check=True)
-        if result.returncode == 0:
-            print(f"✅ Этап {etap_number} завершен успешно")
+        client.server_info()
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Ошибка на этапе {etap_number}: {e}")
+    except Exception as e:
         return False
 
-def main():
-    """Главная функция для запуска всех этапов"""
+def get_mongo_client():
+    """Получение подключения к MongoDB с правильными параметрами"""
+    mongo_client = None
     
-    print("📦 СРАВНЕНИЕ POSTGRESQL И MONGODB ДЛЯ ЛОГИСТИЧЕСКОЙ СИСТЕМЫ")
-    print("=" * 70)
-    print("🔧 Версия с правильными параметрами подключения")
-    print("=" * 70)
-    print("📊 Параметры подключения:")
-    print("   - PostgreSQL: studpg/student@postgresql:5432")
-    print("   - MongoDB: studmongo/mongouser@localhost:27017")
-    print("=" * 70)
+    try:
+        # Сначала пробуем localhost
+        mongo_client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/')
+        if check_mongo_connection(mongo_client):
+            print("  ✅ Подключение к MongoDB через localhost")
+            return mongo_client
+        else:
+            raise Exception("Не удалось подключиться через localhost")
+    except:
+        try:
+            # Пробуем через docker сервис
+            mongo_client = MongoClient('mongodb://mongouser:mongopass@mongodb:27017/')
+            if check_mongo_connection(mongo_client):
+                print("  ✅ Подключение к MongoDB через docker сервис")
+                return mongo_client
+            else:
+                raise Exception("Не удалось подключиться через docker сервис")
+        except:
+            print("  ❌ Не удалось подключиться к MongoDB")
+            return None
+
+def measure_postgres_performance():
+    """Измерение производительности PostgreSQL"""
     
-    # Создание директории для данных
-    os.makedirs('data', exist_ok=True)
+    conn_params = {
+        "dbname": "studpg",
+        "user": "student", 
+        "password": "Stud2024!!!",
+        "host": "postgresql",
+        "port": "5432"
+    }
     
-    # Этапы выполнения
-    stages = [
-        (1, "01_data_generation.py", "Генерация тестовых данных"),
-        (2, "02_postgres_setup.py", "Настройка PostgreSQL"),
-        (3, "03_mongodb_setup.py", "Настройка MongoDB"),
-        (4, "04_performance_comparison.py", "Сравнение производительности"),
-        (5, "05_visualization.py", "Визуализация результатов")
-    ]
+    results = {}
     
-    # Запуск всех этапов
-    for etap_number, script_name, description in stages:
-        success = run_etap(etap_number, script_name, description)
-        if not success:
-            print(f"\n⚠️ Проблема на этапе {etap_number}, продолжаем...")
+    try:
+        conn = psycopg2.connect(**conn_params)
+        
+        # Запрос 1: Простой поиск по статусу
+        print("  📊 PostgreSQL: Простой поиск...")
+        start_time = time.time()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM shipments WHERE status = 'В пути'")
+            count = cur.fetchone()[0]
+        query1_time = time.time() - start_time
+        
+        # Запрос 2: Поиск с JOIN
+        print("  📊 PostgreSQL: Поиск с JOIN...")
+        start_time = time.time()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT s.tracking_number, wf.city, wt.city, r.distance
+                FROM shipments s
+                JOIN warehouses wf ON s.warehouse_from_id = wf.id
+                JOIN warehouses wt ON s.warehouse_to_id = wt.id  
+                JOIN routes r ON s.route_id = r.id
+                WHERE s.weight > 500
+                LIMIT 1000
+            """)
+            results_data = cur.fetchall()
+        query2_time = time.time() - start_time
+        
+        # Запрос 3: Агрегация
+        print("  📊 PostgreSQL: Агрегация...")
+        start_time = time.time()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT status, COUNT(*), AVG(weight), AVG(value)
+                FROM shipments 
+                GROUP BY status
+            """)
+            agg_results = cur.fetchall()
+        query3_time = time.time() - start_time
+        
+        results = {
+            'query1_simple_search': round(query1_time, 4),
+            'query2_join_search': round(query2_time, 4),
+            'query3_aggregation': round(query3_time, 4),
+            'records_found': {
+                'in_transit': count,
+                'heavy_shipments': len(results_data),
+                'status_groups': len(agg_results)
+            }
+        }
+        
+        conn.close()
+        
+    except Exception as e:
+        print(f"  ❌ Ошибка PostgreSQL: {e}")
+        results = {'error': str(e)}
     
-    print(f"\n🎉 ВСЕ ЭТАПЫ ЗАВЕРШЕНЫ!")
-    print("📁 Результаты сохранены в папке 'data/':")
-    print("   - 01_generated_data.json - исходные данные")
-    print("   - 02_postgres_metadata.json - метаданные PostgreSQL")
-    print("   - 03_mongodb_metadata.json - метаданные MongoDB") 
-    print("   - 04_performance_comparison.json - сравнение производительности")
-    print("   - 05_summary_report.json - сводный отчет")
-    print("   - 05_comparison_visualization.png - графики сравнения")
+    return results
+
+def measure_mongodb_performance():
+    """Измерение производительности MongoDB"""
+    
+    results = {}
+    
+    mongo_client = get_mongo_client()
+    if not mongo_client:
+        return {'error': 'Не удалось подключиться к MongoDB'}
+    
+    try:
+        db = mongo_client['studmongo']
+        
+        # Запрос 1: Простой поиск по статусу
+        print("  📊 MongoDB: Простой поиск...")
+        start_time = time.time()
+        count = db.shipments.count_documents({"status": "В пути"})
+        query1_time = time.time() - start_time
+        
+        # Запрос 2: Поиск с "JOIN" (вложенные документы)
+        print("  📊 MongoDB: Поиск с вложенными документами...")
+        start_time = time.time()
+        results_data = list(db.shipments.find(
+            {"weight": {"$gt": 500}},
+            {
+                "tracking_number": 1,
+                "warehouse_from.city": 1,
+                "warehouse_to.city": 1, 
+                "route.distance": 1
+            }
+        ).limit(1000))
+        query2_time = time.time() - start_time
+        
+        # Запрос 3: Агрегация
+        print("  📊 MongoDB: Агрегация...")
+        start_time = time.time()
+        pipeline = [
+            {"$group": {
+                "_id": "$status",
+                "count": {"$sum": 1},
+                "avg_weight": {"$avg": "$weight"},
+                "avg_value": {"$avg": "$value"}
+            }}
+        ]
+        agg_results = list(db.shipments.aggregate(pipeline))
+        query3_time = time.time() - start_time
+        
+        results = {
+            'query1_simple_search': round(query1_time, 4),
+            'query2_nested_search': round(query2_time, 4),
+            'query3_aggregation': round(query3_time, 4),
+            'records_found': {
+                'in_transit': count,
+                'heavy_shipments': len(results_data),
+                'status_groups': len(agg_results)
+            }
+        }
+        
+        mongo_client.close()
+        
+    except Exception as e:
+        print(f"  ❌ Ошибка MongoDB: {e}")
+        results = {'error': str(e)}
+    
+    return results
+
+def compare_performance():
+    """Сравнение производительности PostgreSQL и MongoDB"""
+    
+    print("⚡ ЗАПУСК ТЕСТОВ ПРОИЗВОДИТЕЛЬНОСТИ")
+    print("=" * 50)
+    
+    # Загрузка метаданных о размерах
+    try:
+        with open('data/02_postgres_metadata.json', 'r') as f:
+            pg_meta = json.load(f)
+    except:
+        pg_meta = {'database_size': 'Неизвестно'}
+    
+    try:
+        with open('data/03_mongodb_metadata.json', 'r') as f:
+            mongo_meta = json.load(f)
+    except:
+        mongo_meta = {'collections': {'shipments': {'size_mb': 'Неизвестно'}}}
+    
+    # Измерение производительности
+    print("\n📊 PostgreSQL - выполнение запросов...")
+    pg_results = measure_postgres_performance()
+    
+    print("\n📊 MongoDB - выполнение запросов...")
+    mongo_results = measure_mongodb_performance()
+    
+    # Анализ результатов
+    comparison = {
+        'comparison_time': datetime.now().isoformat(),
+        'storage_comparison': {
+            'postgresql_size': pg_meta.get('database_size', 'Неизвестно'),
+            'mongodb_size': f"{mongo_meta.get('collections', {}).get('shipments', {}).get('size_mb', 'Неизвестно')} MB"
+        },
+        'performance_results': {
+            'postgresql': pg_results,
+            'mongodb': mongo_results
+        },
+        'analysis': {}
+    }
+    
+    # Сравнение времени выполнения
+    if 'error' not in pg_results and 'error' not in mongo_results:
+        query_mapping = {
+            'query1_simple_search': 'query1_simple_search',
+            'query2_join_search': 'query2_nested_search', 
+            'query3_aggregation': 'query3_aggregation'
+        }
+        
+        for pg_query, mongo_query in query_mapping.items():
+            pg_time = pg_results.get(pg_query)
+            mongo_time = mongo_results.get(mongo_query)
+            
+            if pg_time and mongo_time:
+                faster = 'PostgreSQL' if pg_time < mongo_time else 'MongoDB'
+                speedup = max(pg_time, mongo_time) / min(pg_time, mongo_time)
+                
+                comparison['analysis'][pg_query] = {
+                    'postgresql_time': pg_time,
+                    'mongodb_time': mongo_time,
+                    'faster': faster,
+                    'speedup_ratio': round(speedup, 2)
+                }
+    
+    # Сохранение результатов сравнения
+    with open('data/04_performance_comparison.json', 'w', encoding='utf-8') as f:
+        json.dump(comparison, f, ensure_ascii=False, indent=2)
+    
+    # Вывод результатов
+    print("\n📈 РЕЗУЛЬТАТЫ СРАВНЕНИЯ:")
+    print(f"💾 Размер данных:")
+    print(f"   - PostgreSQL: {comparison['storage_comparison']['postgresql_size']}")
+    print(f"   - MongoDB: {comparison['storage_comparison']['mongodb_size']}")
+    
+    if 'analysis' in comparison:
+        print("\n⏱️ Время выполнения запросов:")
+        for query, stats in comparison['analysis'].items():
+            query_name = {
+                'query1_simple_search': 'Простой поиск',
+                'query2_join_search': 'Сложный поиск', 
+                'query3_aggregation': 'Агрегация'
+            }.get(query, query)
+            
+            print(f"   {query_name}:")
+            print(f"     - PostgreSQL: {stats['postgresql_time']}с")
+            print(f"     - MongoDB: {stats['mongodb_time']}с")
+            print(f"     - Быстрее: {stats['faster']} (в {stats['speedup_ratio']} раз)")
+    
+    print("\n✅ Результаты сохранены в data/04_performance_comparison.json")
+    
+    return comparison
 
 if __name__ == "__main__":
-    main()
+    compare_performance()
