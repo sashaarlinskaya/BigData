@@ -1,1 +1,112 @@
-https://chat.deepseek.com/a/chat/s/bf9a1c8b-201e-41df-acb0-f412f2489934
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import json
+import os
+
+def generate_logistics_data():
+    """Генерация тестовых данных для логистической системы"""
+    np.random.seed(42)
+    
+    # Параметры данных
+    n_shipments = 100000
+    n_warehouses = 100
+    n_routes = 500
+    
+    print("📊 Генерация логистических данных...")
+    
+    # Генерация складов
+    cities = ['Москва', 'Санкт-Петербург', 'Новосибирск', 'Екатеринбург', 'Казань']
+    warehouse_types = ['Центральный', 'Региональный', 'Локальный', 'Транзитный']
+    
+    warehouses_data = []
+    for i in range(n_warehouses):
+        warehouses_data.append({
+            'id': i,
+            'name': f"Склад_{i:03d}",
+            'city': np.random.choice(cities),
+            'type': np.random.choice(warehouse_types),
+            'capacity': np.random.randint(1000, 50000),
+            'employees': np.random.randint(5, 200),
+            'latitude': round(np.random.uniform(55.0, 58.0), 6),
+            'longitude': round(np.random.uniform(37.0, 40.0), 6)
+        })
+    
+    # Генерация маршрутов
+    transport_types = ['Грузовик', 'Фура', 'Рефрижератор', 'Контейнеровоз']
+    
+    routes_data = []
+    for i in range(n_routes):
+        start_city = np.random.choice(cities)
+        end_city = np.random.choice([c for c in cities if c != start_city])
+        distance = np.random.randint(100, 2000)
+        
+        routes_data.append({
+            'id': i,
+            'name': f"Маршрут_{i:03d}: {start_city}-{end_city}",
+            'start_city': start_city,
+            'end_city': end_city,
+            'distance': distance,
+            'duration_hours': distance // 60,
+            'transport_type': np.random.choice(transport_types),
+            'status': np.random.choice(['Активен', 'Неактивен'], p=[0.8, 0.2]),
+            'cost_per_km': round(np.random.uniform(10, 50), 2)
+        })
+    
+    # Генерация грузов
+    start_date = datetime(2023, 1, 1)
+    shipment_statuses = ['В обработке', 'В пути', 'Доставлен', 'Задержан']
+    
+    shipments_data = []
+    for i in range(n_shipments):
+        warehouse_from = np.random.randint(0, n_warehouses)
+        warehouse_to = np.random.randint(0, n_warehouses)
+        
+        while warehouse_to == warehouse_from:
+            warehouse_to = np.random.randint(0, n_warehouses)
+        
+        shipments_data.append({
+            'id': i,
+            'tracking_number': f"TRK{i:08d}",
+            'warehouse_from_id': warehouse_from,
+            'warehouse_to_id': warehouse_to,
+            'route_id': np.random.randint(0, n_routes),
+            'weight': round(np.random.uniform(1, 1000), 2),
+            'volume': round(np.random.uniform(0.1, 10), 2),
+            'value': round(np.random.uniform(100, 50000), 2),
+            'shipment_date': (start_date + timedelta(days=np.random.randint(0, 365))).isoformat(),
+            'delivery_date': (start_date + timedelta(days=np.random.randint(1, 380))).isoformat(),
+            'status': np.random.choice(shipment_statuses, p=[0.2, 0.3, 0.4, 0.1]),
+            'type': np.random.choice(['Хрупкий', 'Опасный', 'Скоропортящийся', 'Обычный']),
+            'priority': np.random.choice(['Низкий', 'Средний', 'Высокий'], p=[0.6, 0.3, 0.1])
+        })
+    
+    # Сохранение в JSON
+    data = {
+        'metadata': {
+            'generated_at': datetime.now().isoformat(),
+            'n_shipments': n_shipments,
+            'n_warehouses': n_warehouses,
+            'n_routes': n_routes
+        },
+        'warehouses': warehouses_data,
+        'routes': routes_data,
+        'shipments': shipments_data
+    }
+    
+    os.makedirs('data', exist_ok=True)
+    with open('data/01_generated_data.json', 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    print("✅ Данные сгенерированы и сохранены в data/01_generated_data.json")
+    
+    # Статистика
+    print(f"📦 Сгенерировано:")
+    print(f"   - Склады: {len(warehouses_data):,}")
+    print(f"   - Маршруты: {len(routes_data):,}")
+    print(f"   - Грузы: {len(shipments_data):,}")
+    
+    return data
+
+if __name__ == "__main__":
+    generate_logistics_data()
