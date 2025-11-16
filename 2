@@ -229,3 +229,47 @@ def setup_postgres_database():
 
 if __name__ == "__main__":
     setup_postgres_database()
+
+
+
+    -----------------------------------------------
+
+    CREATE TABLE warehouses (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100),
+    city VARCHAR(50),
+    type VARCHAR(50),
+    capacity INTEGER,
+    employees INTEGER,
+    latitude DECIMAL(10,6),
+    longitude DECIMAL(10,6)
+);
+
+CREATE TABLE routes (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100),
+    start_city VARCHAR(50),
+    end_city VARCHAR(50),
+    distance INTEGER,
+    duration_hours INTEGER,
+    transport_type VARCHAR(50),
+    status VARCHAR(50),
+    cost_per_km DECIMAL(10,2)
+);
+
+CREATE TABLE shipments (
+    id INTEGER PRIMARY KEY,
+    tracking_number VARCHAR(20) UNIQUE,
+    warehouse_from_id INTEGER,
+    warehouse_to_id INTEGER,
+    route_id INTEGER,
+    weight DECIMAL(10,2),
+    volume DECIMAL(10,2),
+    value DECIMAL(10,2),
+    shipment_date TIMESTAMP,
+    delivery_date TIMESTAMP,
+    status VARCHAR(50),
+    type VARCHAR(50),
+    priority VARCHAR(20)
+);
+
