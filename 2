@@ -273,3 +273,188 @@ CREATE TABLE shipments (
     priority VARCHAR(20)
 );
 
+
+
+----------------------------------------------------------------------------------------------------------------------------------
+from pymongo import MongoClient
+import json
+from datetime import datetime
+
+def check_mongo_connection(client):
+    """Проверка подключения к MongoDB"""
+    try:
+        client.server_info()
+        return True
+    except Exception as e:
+        return False
+
+def setup_mongodb_database():
+    """Настройка MongoDB и загрузка данных с правильными параметрами"""
+    
+    mongo_client = None
+    
+    try:
+        # Сначала пробуем подключиться через localhost
+        print("🔗 Попытка подключения к MongoDB через localhost...")
+        mongo_client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/')
+        if check_mongo_connection(mongo_client):
+            print("✅ Успешное подключение к MongoDB через localhost")
+        else:
+            raise Exception("Не удалось подключиться через localhost")
+    except:
+        try:
+            # Если не работает через localhost, пробуем через docker сервис
+            print("🔗 Попытка подключения к MongoDB через docker сервис...")
+            mongo_client = MongoClient('mongodb://mongouser:mongopass@mongodb:27017/')
+            if check_mongo_connection(mongo_client):
+                print("✅ Успешное подключение к MongoDB через docker сервис")
+            else:
+                raise Exception("Не удалось подключиться через docker сервис")
+        except:
+            print("❌ Не удалось подключиться к MongoDB")
+            print("Проверьте, что MongoDB запущен: docker compose ps")
+            return None
+
+    if mongo_client:
+        try:
+            # Используем базу данных studmongo как указано
+            mongo_db = mongo_client['studmongo']
+            
+            # Очистка коллекций
+            print("🗑️ Очистка старых коллекций...")
+            mongo_db.shipments.drop()
+            print("✅ Коллекция shipments очищена")
+            
+            # Загрузка сгенерированных данных
+            with open('data/01_generated_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Подготовка данных для MongoDB с вложенными документами
+            print("📥 Подготовка данных для MongoDB...")
+            
+            # Создаем словари для быстрого доступа
+            warehouses_dict = {w['id']: w for w in data['warehouses']}
+            routes_dict = {r['id']: r for r in data['routes']}
+            
+            # Создаем документы грузов с вложенной информацией
+            shipments_docs = []
+            for shipment in data['shipments']:
+                warehouse_from = warehouses_dict[shipment['warehouse_from_id']]
+                warehouse_to = warehouses_dict[shipment['warehouse_to_id']]
+                route = routes_dict[shipment['route_id']]
+                
+                shipment_doc = {
+                    '_id': shipment['id'],
+                    'tracking_number': shipment['tracking_number'],
+                    'warehouse_from': {
+                        'id': warehouse_from['id'],
+                        'name': warehouse_from['name'],
+                        'city': warehouse_from['city'],
+                        'type': warehouse_from['type'],
+                        'capacity': warehouse_from['capacity'],
+                        'employees': warehouse_from['employees'],
+                        'latitude': warehouse_from['latitude'],
+                        'longitude': warehouse_from['longitude']
+                    },
+                    'warehouse_to': {
+                        'id': warehouse_to['id'],
+                        'name': warehouse_to['name'],
+                        'city': warehouse_to['city'],
+                        'type': warehouse_to['type'],
+                        'capacity': warehouse_to['capacity'],
+                        'employees': warehouse_to['employees'],
+                        'latitude': warehouse_to['latitude'],
+                        'longitude': warehouse_to['longitude']
+                    },
+                    'route': {
+                        'id': route['id'],
+                        'name': route['name'],
+                        'start_city': route['start_city'],
+                        'end_city': route['end_city'],
+                        'distance': route['distance'],
+                        'duration_hours': route['duration_hours'],
+                        'transport_type': route['transport_type'],
+                        'status': route['status'],
+                        'cost_per_km': route['cost_per_km']
+                    },
+                    'weight': shipment['weight'],
+                    'volume': shipment['volume'],
+                    'value': shipment['value'],
+                    'shipment_date': shipment['shipment_date'],
+                    'delivery_date': shipment['delivery_date'],
+                    'status': shipment['status'],
+                    'type': shipment['type'],
+                    'priority': shipment['priority']
+                }
+                shipments_docs.append(shipment_doc)
+            
+            # Загрузка данных в MongoDB
+            print("📥 Загрузка данных в MongoDB...")
+            result = mongo_db.shipments.insert_many(shipments_docs)
+            print(f"✅ Загружено {len(result.inserted_ids)} документов в MongoDB")
+            
+            # Создание индексов
+            print("🔍 Создание индексов...")
+            mongo_db.shipments.create_index("tracking_number")
+            mongo_db.shipments.create_index("status")
+            mongo_db.shipments.create_index("shipment_date")
+            mongo_db.shipments.create_index("warehouse_from.city")
+            mongo_db.shipments.create_index("warehouse_to.city")
+            mongo_db.shipments.create_index("route.start_city")
+            mongo_db.shipments.create_index("route.end_city")
+            print("✅ Индексы созданы")
+            
+            # Получение статистики коллекции
+            stats = mongo_db.command("collstats", "shipments")
+            collection_size_mb = stats['size'] / (1024 * 1024)
+            storage_size_mb = stats['storageSize'] / (1024 * 1024)
+            
+            print(f"💾 Размер коллекции: {collection_size_mb:.2f} MB")
+            print(f"💾 Размер хранилища: {storage_size_mb:.2f} MB")
+            
+            # Сохранение метаданных
+            mongodb_metadata = {
+                'setup_time': datetime.now().isoformat(),
+                'connection': {
+                    'host': 'localhost',
+                    'database': 'studmongo',
+                    'user': 'mongouser'
+                },
+                'collections': {
+                    'shipments': {
+                        'count': len(shipments_docs),
+                        'size_mb': round(collection_size_mb, 2),
+                        'storage_size_mb': round(storage_size_mb, 2),
+                        'avg_object_size': stats.get('avgObjSize', 0),
+                        'total_index_size_mb': round(stats.get('totalIndexSize', 0) / (1024 * 1024), 2)
+                    }
+                },
+                'indexes_created': [
+                    'tracking_number',
+                    'status', 
+                    'shipment_date',
+                    'warehouse_from.city',
+                    'warehouse_to.city',
+                    'route.start_city',
+                    'route.end_city'
+                ],
+                'data_structure': 'Документная с вложенными объектами',
+                'status': 'success'
+            }
+            
+            with open('data/03_mongodb_metadata.json', 'w', encoding='utf-8') as f:
+                json.dump(mongodb_metadata, f, ensure_ascii=False, indent=2)
+            
+            print("✅ Метаданные сохранены в data/03_mongodb_metadata.json")
+            
+            mongo_client.close()
+            return mongodb_metadata
+            
+        except Exception as e:
+            print(f"❌ Ошибка при работе с MongoDB: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+if __name__ == "__main__":
+    setup_mongodb_database()
