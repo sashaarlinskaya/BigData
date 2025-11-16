@@ -1,12 +1,12 @@
 import psycopg2
 import json
-import pandas as pd
 from datetime import datetime
+import sys
 
 def setup_postgres_database():
-    """Настройка PostgreSQL и загрузка данных"""
+    """Настройка PostgreSQL и загрузка данных с правильными параметрами"""
     
-    # Параметры подключения
+    # Параметры подключения (указанные вами)
     conn_params = {
         "dbname": "studpg",
         "user": "student", 
@@ -17,6 +17,7 @@ def setup_postgres_database():
     
     try:
         # Подключение к PostgreSQL
+        print("🔗 Подключение к PostgreSQL...")
         conn = psycopg2.connect(**conn_params)
         print("✅ Успешное подключение к PostgreSQL")
         
@@ -24,129 +25,206 @@ def setup_postgres_database():
         with open('data/01_generated_data.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        # Создание таблиц
+        # Создание таблиц с обработкой ошибок прав
         with conn.cursor() as cur:
-            # Удаление существующих таблиц
-            cur.execute("DROP TABLE IF EXISTS shipments CASCADE")
-            cur.execute("DROP TABLE IF EXISTS routes CASCADE") 
-            cur.execute("DROP TABLE IF EXISTS warehouses CASCADE")
+            print("🗃️ Создание таблиц...")
+            
+            # Пытаемся удалить старые таблицы (если есть права)
+            try:
+                cur.execute("DROP TABLE IF EXISTS shipments CASCADE")
+                cur.execute("DROP TABLE IF EXISTS routes CASCADE") 
+                cur.execute("DROP TABLE IF EXISTS warehouses CASCADE")
+                print("✅ Старые таблицы удалены")
+            except Exception as e:
+                print(f"⚠️ Не удалось удалить старые таблицы: {e}")
+                print("Продолжаем создание новых таблиц...")
             
             # Создание таблицы складов
-            cur.execute("""
-                CREATE TABLE warehouses (
-                    id INTEGER PRIMARY KEY,
-                    name VARCHAR(100),
-                    city VARCHAR(50),
-                    type VARCHAR(50),
-                    capacity INTEGER,
-                    employees INTEGER,
-                    latitude DECIMAL(10,6),
-                    longitude DECIMAL(10,6)
-                )
-            """)
+            try:
+                cur.execute("""
+                    CREATE TABLE warehouses (
+                        id INTEGER PRIMARY KEY,
+                        name VARCHAR(100),
+                        city VARCHAR(50),
+                        type VARCHAR(50),
+                        capacity INTEGER,
+                        employees INTEGER,
+                        latitude DECIMAL(10,6),
+                        longitude DECIMAL(10,6)
+                    )
+                """)
+                print("✅ Таблица warehouses создана")
+            except Exception as e:
+                print(f"❌ Ошибка создания warehouses: {e}")
+                return None
             
             # Создание таблицы маршрутов
-            cur.execute("""
-                CREATE TABLE routes (
-                    id INTEGER PRIMARY KEY,
-                    name VARCHAR(100),
-                    start_city VARCHAR(50),
-                    end_city VARCHAR(50),
-                    distance INTEGER,
-                    duration_hours INTEGER,
-                    transport_type VARCHAR(50),
-                    status VARCHAR(50),
-                    cost_per_km DECIMAL(10,2)
-                )
-            """)
+            try:
+                cur.execute("""
+                    CREATE TABLE routes (
+                        id INTEGER PRIMARY KEY,
+                        name VARCHAR(100),
+                        start_city VARCHAR(50),
+                        end_city VARCHAR(50),
+                        distance INTEGER,
+                        duration_hours INTEGER,
+                        transport_type VARCHAR(50),
+                        status VARCHAR(50),
+                        cost_per_km DECIMAL(10,2)
+                    )
+                """)
+                print("✅ Таблица routes создана")
+            except Exception as e:
+                print(f"❌ Ошибка создания routes: {e}")
+                return None
             
             # Создание таблицы грузов
-            cur.execute("""
-                CREATE TABLE shipments (
-                    id INTEGER PRIMARY KEY,
-                    tracking_number VARCHAR(20) UNIQUE,
-                    warehouse_from_id INTEGER REFERENCES warehouses(id),
-                    warehouse_to_id INTEGER REFERENCES warehouses(id),
-                    route_id INTEGER REFERENCES routes(id),
-                    weight DECIMAL(10,2),
-                    volume DECIMAL(10,2),
-                    value DECIMAL(10,2),
-                    shipment_date TIMESTAMP,
-                    delivery_date TIMESTAMP,
-                    status VARCHAR(50),
-                    type VARCHAR(50),
-                    priority VARCHAR(20)
-                )
-            """)
-            
-            print("✅ Таблицы созданы")
+            try:
+                cur.execute("""
+                    CREATE TABLE shipments (
+                        id INTEGER PRIMARY KEY,
+                        tracking_number VARCHAR(20) UNIQUE,
+                        warehouse_from_id INTEGER,
+                        warehouse_to_id INTEGER,
+                        route_id INTEGER,
+                        weight DECIMAL(10,2),
+                        volume DECIMAL(10,2),
+                        value DECIMAL(10,2),
+                        shipment_date TIMESTAMP,
+                        delivery_date TIMESTAMP,
+                        status VARCHAR(50),
+                        type VARCHAR(50),
+                        priority VARCHAR(20)
+                    )
+                """)
+                print("✅ Таблица shipments создана")
+            except Exception as e:
+                print(f"❌ Ошибка создания shipments: {e}")
+                return None
         
         # Загрузка данных
         print("📥 Загрузка данных в PostgreSQL...")
         
         # Загрузка складов
         with conn.cursor() as cur:
+            warehouses_count = 0
             for warehouse in data['warehouses']:
-                cur.execute("""
-                    INSERT INTO warehouses VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (warehouse['id'], warehouse['name'], warehouse['city'], 
-                      warehouse['type'], warehouse['capacity'], warehouse['employees'],
-                      warehouse['latitude'], warehouse['longitude']))
+                try:
+                    cur.execute("""
+                        INSERT INTO warehouses (id, name, city, type, capacity, employees, latitude, longitude)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (warehouse['id'], warehouse['name'], warehouse['city'], 
+                          warehouse['type'], warehouse['capacity'], warehouse['employees'],
+                          warehouse['latitude'], warehouse['longitude']))
+                    warehouses_count += 1
+                except Exception as e:
+                    print(f"⚠️ Ошибка вставки склада {warehouse['id']}: {e}")
+        
+        print(f"✅ Загружено складов: {warehouses_count}")
         
         # Загрузка маршрутов
         with conn.cursor() as cur:
+            routes_count = 0
             for route in data['routes']:
-                cur.execute("""
-                    INSERT INTO routes VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (route['id'], route['name'], route['start_city'], route['end_city'],
-                      route['distance'], route['duration_hours'], route['transport_type'],
-                      route['status'], route['cost_per_km']))
+                try:
+                    cur.execute("""
+                        INSERT INTO routes (id, name, start_city, end_city, distance, duration_hours, 
+                                         transport_type, status, cost_per_km)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (route['id'], route['name'], route['start_city'], route['end_city'],
+                          route['distance'], route['duration_hours'], route['transport_type'],
+                          route['status'], route['cost_per_km']))
+                    routes_count += 1
+                except Exception as e:
+                    print(f"⚠️ Ошибка вставки маршрута {route['id']}: {e}")
+        
+        print(f"✅ Загружено маршрутов: {routes_count}")
         
         # Загрузка грузов
         with conn.cursor() as cur:
+            shipments_count = 0
             for shipment in data['shipments']:
-                cur.execute("""
-                    INSERT INTO shipments VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (shipment['id'], shipment['tracking_number'], shipment['warehouse_from_id'],
-                      shipment['warehouse_to_id'], shipment['route_id'], shipment['weight'],
-                      shipment['volume'], shipment['value'], shipment['shipment_date'],
-                      shipment['delivery_date'], shipment['status'], shipment['type'],
-                      shipment['priority']))
+                try:
+                    cur.execute("""
+                        INSERT INTO shipments (id, tracking_number, warehouse_from_id, warehouse_to_id, 
+                                            route_id, weight, volume, value, shipment_date, 
+                                            delivery_date, status, type, priority)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (shipment['id'], shipment['tracking_number'], shipment['warehouse_from_id'],
+                          shipment['warehouse_to_id'], shipment['route_id'], shipment['weight'],
+                          shipment['volume'], shipment['value'], shipment['shipment_date'],
+                          shipment['delivery_date'], shipment['status'], shipment['type'],
+                          shipment['priority']))
+                    shipments_count += 1
+                except Exception as e:
+                    print(f"⚠️ Ошибка вставки груза {shipment['id']}: {e}")
+        
+        print(f"✅ Загружено грузов: {shipments_count}")
         
         conn.commit()
-        print("✅ Данные загружены в PostgreSQL")
+        
+        # Создание индексов (если есть права)
+        print("🔍 Создание индексов...")
+        with conn.cursor() as cur:
+            try:
+                cur.execute("CREATE INDEX idx_shipments_tracking ON shipments(tracking_number)")
+                print("✅ Индекс idx_shipments_tracking создан")
+            except Exception as e:
+                print(f"⚠️ Не удалось создать индекс idx_shipments_tracking: {e}")
+            
+            try:
+                cur.execute("CREATE INDEX idx_shipments_status ON shipments(status)")
+                print("✅ Индекс idx_shipments_status создан")
+            except Exception as e:
+                print(f"⚠️ Не удалось создать индекс idx_shipments_status: {e}")
         
         # Получение размера базы данных
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_size_pretty(pg_database_size('studpg'))")
-            db_size = cur.fetchone()[0]
+            try:
+                cur.execute("SELECT pg_size_pretty(pg_database_size('studpg'))")
+                db_size = cur.fetchone()[0]
+                print(f"💾 Размер базы данных: {db_size}")
+            except Exception as e:
+                print(f"⚠️ Не удалось получить размер БД: {e}")
+                db_size = "Неизвестно"
         
         # Сохранение метаданных
         postgres_metadata = {
             'setup_time': datetime.now().isoformat(),
+            'connection_params': {
+                'host': conn_params['host'],
+                'database': conn_params['dbname'],
+                'user': conn_params['user']
+            },
             'tables_created': ['warehouses', 'routes', 'shipments'],
             'records_loaded': {
-                'warehouses': len(data['warehouses']),
-                'routes': len(data['routes']), 
-                'shipments': len(data['shipments'])
+                'warehouses': warehouses_count,
+                'routes': routes_count, 
+                'shipments': shipments_count
             },
             'database_size': db_size,
-            'indexes_created': [
-                'PRIMARY KEY на всех таблицах',
-                'UNIQUE на tracking_number'
-            ]
+            'status': 'success'
         }
         
         with open('data/02_postgres_metadata.json', 'w', encoding='utf-8') as f:
             json.dump(postgres_metadata, f, ensure_ascii=False, indent=2)
         
-        print(f"💾 Размер базы данных: {db_size}")
         print("✅ Метаданные сохранены в data/02_postgres_metadata.json")
         
         conn.close()
+        return postgres_metadata
         
+    except psycopg2.OperationalError as e:
+        print(f"❌ Ошибка подключения к PostgreSQL: {e}")
+        print("Проверьте:")
+        print("   - Запущен ли контейнер PostgreSQL: docker compose ps")
+        print("   - Правильность параметров подключения")
+        print("   - Доступность хоста 'postgresql' из контейнера")
+        return None
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Неожиданная ошибка: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 if __name__ == "__main__":
