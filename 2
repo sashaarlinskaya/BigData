@@ -1,282 +1,6 @@
 import psycopg2
-import json
-from datetime import datetime
-import sys
-
-def setup_postgres_database():
-    """Настройка PostgreSQL и загрузка данных с правильными параметрами"""
-    
-    # Параметры подключения (указанные вами)
-    conn_params = {
-        "dbname": "studpg",
-        "user": "student", 
-        "password": "Stud2024!!!",
-        "host": "postgresql",
-        "port": "5432"
-    }
-    
-    try:
-        # Подключение к PostgreSQL
-        print("🔗 Подключение к PostgreSQL...")
-        conn = psycopg2.connect(**conn_params)
-        print("✅ Успешное подключение к PostgreSQL")
-        
-        # Загрузка сгенерированных данных
-        with open('data/01_generated_data.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Создание таблиц с обработкой ошибок прав
-        with conn.cursor() as cur:
-            print("🗃️ Создание таблиц...")
-            
-            # Пытаемся удалить старые таблицы (если есть права)
-            try:
-                cur.execute("DROP TABLE IF EXISTS shipments CASCADE")
-                cur.execute("DROP TABLE IF EXISTS routes CASCADE") 
-                cur.execute("DROP TABLE IF EXISTS warehouses CASCADE")
-                print("✅ Старые таблицы удалены")
-            except Exception as e:
-                print(f"⚠️ Не удалось удалить старые таблицы: {e}")
-                print("Продолжаем создание новых таблиц...")
-            
-            # Создание таблицы складов
-            try:
-                cur.execute("""
-                    CREATE TABLE warehouses (
-                        id INTEGER PRIMARY KEY,
-                        name VARCHAR(100),
-                        city VARCHAR(50),
-                        type VARCHAR(50),
-                        capacity INTEGER,
-                        employees INTEGER,
-                        latitude DECIMAL(10,6),
-                        longitude DECIMAL(10,6)
-                    )
-                """)
-                print("✅ Таблица warehouses создана")
-            except Exception as e:
-                print(f"❌ Ошибка создания warehouses: {e}")
-                return None
-            
-            # Создание таблицы маршрутов
-            try:
-                cur.execute("""
-                    CREATE TABLE routes (
-                        id INTEGER PRIMARY KEY,
-                        name VARCHAR(100),
-                        start_city VARCHAR(50),
-                        end_city VARCHAR(50),
-                        distance INTEGER,
-                        duration_hours INTEGER,
-                        transport_type VARCHAR(50),
-                        status VARCHAR(50),
-                        cost_per_km DECIMAL(10,2)
-                    )
-                """)
-                print("✅ Таблица routes создана")
-            except Exception as e:
-                print(f"❌ Ошибка создания routes: {e}")
-                return None
-            
-            # Создание таблицы грузов
-            try:
-                cur.execute("""
-                    CREATE TABLE shipments (
-                        id INTEGER PRIMARY KEY,
-                        tracking_number VARCHAR(20) UNIQUE,
-                        warehouse_from_id INTEGER,
-                        warehouse_to_id INTEGER,
-                        route_id INTEGER,
-                        weight DECIMAL(10,2),
-                        volume DECIMAL(10,2),
-                        value DECIMAL(10,2),
-                        shipment_date TIMESTAMP,
-                        delivery_date TIMESTAMP,
-                        status VARCHAR(50),
-                        type VARCHAR(50),
-                        priority VARCHAR(20)
-                    )
-                """)
-                print("✅ Таблица shipments создана")
-            except Exception as e:
-                print(f"❌ Ошибка создания shipments: {e}")
-                return None
-        
-        # Загрузка данных
-        print("📥 Загрузка данных в PostgreSQL...")
-        
-        # Загрузка складов
-        with conn.cursor() as cur:
-            warehouses_count = 0
-            for warehouse in data['warehouses']:
-                try:
-                    cur.execute("""
-                        INSERT INTO warehouses (id, name, city, type, capacity, employees, latitude, longitude)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (warehouse['id'], warehouse['name'], warehouse['city'], 
-                          warehouse['type'], warehouse['capacity'], warehouse['employees'],
-                          warehouse['latitude'], warehouse['longitude']))
-                    warehouses_count += 1
-                except Exception as e:
-                    print(f"⚠️ Ошибка вставки склада {warehouse['id']}: {e}")
-        
-        print(f"✅ Загружено складов: {warehouses_count}")
-        
-        # Загрузка маршрутов
-        with conn.cursor() as cur:
-            routes_count = 0
-            for route in data['routes']:
-                try:
-                    cur.execute("""
-                        INSERT INTO routes (id, name, start_city, end_city, distance, duration_hours, 
-                                         transport_type, status, cost_per_km)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (route['id'], route['name'], route['start_city'], route['end_city'],
-                          route['distance'], route['duration_hours'], route['transport_type'],
-                          route['status'], route['cost_per_km']))
-                    routes_count += 1
-                except Exception as e:
-                    print(f"⚠️ Ошибка вставки маршрута {route['id']}: {e}")
-        
-        print(f"✅ Загружено маршрутов: {routes_count}")
-        
-        # Загрузка грузов
-        with conn.cursor() as cur:
-            shipments_count = 0
-            for shipment in data['shipments']:
-                try:
-                    cur.execute("""
-                        INSERT INTO shipments (id, tracking_number, warehouse_from_id, warehouse_to_id, 
-                                            route_id, weight, volume, value, shipment_date, 
-                                            delivery_date, status, type, priority)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (shipment['id'], shipment['tracking_number'], shipment['warehouse_from_id'],
-                          shipment['warehouse_to_id'], shipment['route_id'], shipment['weight'],
-                          shipment['volume'], shipment['value'], shipment['shipment_date'],
-                          shipment['delivery_date'], shipment['status'], shipment['type'],
-                          shipment['priority']))
-                    shipments_count += 1
-                except Exception as e:
-                    print(f"⚠️ Ошибка вставки груза {shipment['id']}: {e}")
-        
-        print(f"✅ Загружено грузов: {shipments_count}")
-        
-        conn.commit()
-        
-        # Создание индексов (если есть права)
-        print("🔍 Создание индексов...")
-        with conn.cursor() as cur:
-            try:
-                cur.execute("CREATE INDEX idx_shipments_tracking ON shipments(tracking_number)")
-                print("✅ Индекс idx_shipments_tracking создан")
-            except Exception as e:
-                print(f"⚠️ Не удалось создать индекс idx_shipments_tracking: {e}")
-            
-            try:
-                cur.execute("CREATE INDEX idx_shipments_status ON shipments(status)")
-                print("✅ Индекс idx_shipments_status создан")
-            except Exception as e:
-                print(f"⚠️ Не удалось создать индекс idx_shipments_status: {e}")
-        
-        # Получение размера базы данных
-        with conn.cursor() as cur:
-            try:
-                cur.execute("SELECT pg_size_pretty(pg_database_size('studpg'))")
-                db_size = cur.fetchone()[0]
-                print(f"💾 Размер базы данных: {db_size}")
-            except Exception as e:
-                print(f"⚠️ Не удалось получить размер БД: {e}")
-                db_size = "Неизвестно"
-        
-        # Сохранение метаданных
-        postgres_metadata = {
-            'setup_time': datetime.now().isoformat(),
-            'connection_params': {
-                'host': conn_params['host'],
-                'database': conn_params['dbname'],
-                'user': conn_params['user']
-            },
-            'tables_created': ['warehouses', 'routes', 'shipments'],
-            'records_loaded': {
-                'warehouses': warehouses_count,
-                'routes': routes_count, 
-                'shipments': shipments_count
-            },
-            'database_size': db_size,
-            'status': 'success'
-        }
-        
-        with open('data/02_postgres_metadata.json', 'w', encoding='utf-8') as f:
-            json.dump(postgres_metadata, f, ensure_ascii=False, indent=2)
-        
-        print("✅ Метаданные сохранены в data/02_postgres_metadata.json")
-        
-        conn.close()
-        return postgres_metadata
-        
-    except psycopg2.OperationalError as e:
-        print(f"❌ Ошибка подключения к PostgreSQL: {e}")
-        print("Проверьте:")
-        print("   - Запущен ли контейнер PostgreSQL: docker compose ps")
-        print("   - Правильность параметров подключения")
-        print("   - Доступность хоста 'postgresql' из контейнера")
-        return None
-    except Exception as e:
-        print(f"❌ Неожиданная ошибка: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-if __name__ == "__main__":
-    setup_postgres_database()
-
-
-
-    -----------------------------------------------
-
-    CREATE TABLE warehouses (
-    id INTEGER PRIMARY KEY,
-    name VARCHAR(100),
-    city VARCHAR(50),
-    type VARCHAR(50),
-    capacity INTEGER,
-    employees INTEGER,
-    latitude DECIMAL(10,6),
-    longitude DECIMAL(10,6)
-);
-
-CREATE TABLE routes (
-    id INTEGER PRIMARY KEY,
-    name VARCHAR(100),
-    start_city VARCHAR(50),
-    end_city VARCHAR(50),
-    distance INTEGER,
-    duration_hours INTEGER,
-    transport_type VARCHAR(50),
-    status VARCHAR(50),
-    cost_per_km DECIMAL(10,2)
-);
-
-CREATE TABLE shipments (
-    id INTEGER PRIMARY KEY,
-    tracking_number VARCHAR(20) UNIQUE,
-    warehouse_from_id INTEGER,
-    warehouse_to_id INTEGER,
-    route_id INTEGER,
-    weight DECIMAL(10,2),
-    volume DECIMAL(10,2),
-    value DECIMAL(10,2),
-    shipment_date TIMESTAMP,
-    delivery_date TIMESTAMP,
-    status VARCHAR(50),
-    type VARCHAR(50),
-    priority VARCHAR(20)
-);
-
-
-
-----------------------------------------------------------------------------------------------------------------------------------
 from pymongo import MongoClient
+import time
 import json
 from datetime import datetime
 
@@ -288,173 +12,257 @@ def check_mongo_connection(client):
     except Exception as e:
         return False
 
-def setup_mongodb_database():
-    """Настройка MongoDB и загрузка данных с правильными параметрами"""
-    
+def get_mongo_client():
+    """Получение подключения к MongoDB с правильными параметрами"""
     mongo_client = None
     
     try:
-        # Сначала пробуем подключиться через localhost
-        print("🔗 Попытка подключения к MongoDB через localhost...")
+        # Сначала пробуем localhost
         mongo_client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/')
         if check_mongo_connection(mongo_client):
-            print("✅ Успешное подключение к MongoDB через localhost")
+            print("  ✅ Подключение к MongoDB через localhost")
+            return mongo_client
         else:
             raise Exception("Не удалось подключиться через localhost")
     except:
         try:
-            # Если не работает через localhost, пробуем через docker сервис
-            print("🔗 Попытка подключения к MongoDB через docker сервис...")
+            # Пробуем через docker сервис
             mongo_client = MongoClient('mongodb://mongouser:mongopass@mongodb:27017/')
             if check_mongo_connection(mongo_client):
-                print("✅ Успешное подключение к MongoDB через docker сервис")
+                print("  ✅ Подключение к MongoDB через docker сервис")
+                return mongo_client
             else:
                 raise Exception("Не удалось подключиться через docker сервис")
         except:
-            print("❌ Не удалось подключиться к MongoDB")
-            print("Проверьте, что MongoDB запущен: docker compose ps")
+            print("  ❌ Не удалось подключиться к MongoDB")
             return None
 
-    if mongo_client:
-        try:
-            # Используем базу данных studmongo как указано
-            mongo_db = mongo_client['studmongo']
-            
-            # Очистка коллекций
-            print("🗑️ Очистка старых коллекций...")
-            mongo_db.shipments.drop()
-            print("✅ Коллекция shipments очищена")
-            
-            # Загрузка сгенерированных данных
-            with open('data/01_generated_data.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Подготовка данных для MongoDB с вложенными документами
-            print("📥 Подготовка данных для MongoDB...")
-            
-            # Создаем словари для быстрого доступа
-            warehouses_dict = {w['id']: w for w in data['warehouses']}
-            routes_dict = {r['id']: r for r in data['routes']}
-            
-            # Создаем документы грузов с вложенной информацией
-            shipments_docs = []
-            for shipment in data['shipments']:
-                warehouse_from = warehouses_dict[shipment['warehouse_from_id']]
-                warehouse_to = warehouses_dict[shipment['warehouse_to_id']]
-                route = routes_dict[shipment['route_id']]
-                
-                shipment_doc = {
-                    '_id': shipment['id'],
-                    'tracking_number': shipment['tracking_number'],
-                    'warehouse_from': {
-                        'id': warehouse_from['id'],
-                        'name': warehouse_from['name'],
-                        'city': warehouse_from['city'],
-                        'type': warehouse_from['type'],
-                        'capacity': warehouse_from['capacity'],
-                        'employees': warehouse_from['employees'],
-                        'latitude': warehouse_from['latitude'],
-                        'longitude': warehouse_from['longitude']
-                    },
-                    'warehouse_to': {
-                        'id': warehouse_to['id'],
-                        'name': warehouse_to['name'],
-                        'city': warehouse_to['city'],
-                        'type': warehouse_to['type'],
-                        'capacity': warehouse_to['capacity'],
-                        'employees': warehouse_to['employees'],
-                        'latitude': warehouse_to['latitude'],
-                        'longitude': warehouse_to['longitude']
-                    },
-                    'route': {
-                        'id': route['id'],
-                        'name': route['name'],
-                        'start_city': route['start_city'],
-                        'end_city': route['end_city'],
-                        'distance': route['distance'],
-                        'duration_hours': route['duration_hours'],
-                        'transport_type': route['transport_type'],
-                        'status': route['status'],
-                        'cost_per_km': route['cost_per_km']
-                    },
-                    'weight': shipment['weight'],
-                    'volume': shipment['volume'],
-                    'value': shipment['value'],
-                    'shipment_date': shipment['shipment_date'],
-                    'delivery_date': shipment['delivery_date'],
-                    'status': shipment['status'],
-                    'type': shipment['type'],
-                    'priority': shipment['priority']
-                }
-                shipments_docs.append(shipment_doc)
-            
-            # Загрузка данных в MongoDB
-            print("📥 Загрузка данных в MongoDB...")
-            result = mongo_db.shipments.insert_many(shipments_docs)
-            print(f"✅ Загружено {len(result.inserted_ids)} документов в MongoDB")
-            
-            # Создание индексов
-            print("🔍 Создание индексов...")
-            mongo_db.shipments.create_index("tracking_number")
-            mongo_db.shipments.create_index("status")
-            mongo_db.shipments.create_index("shipment_date")
-            mongo_db.shipments.create_index("warehouse_from.city")
-            mongo_db.shipments.create_index("warehouse_to.city")
-            mongo_db.shipments.create_index("route.start_city")
-            mongo_db.shipments.create_index("route.end_city")
-            print("✅ Индексы созданы")
-            
-            # Получение статистики коллекции
-            stats = mongo_db.command("collstats", "shipments")
-            collection_size_mb = stats['size'] / (1024 * 1024)
-            storage_size_mb = stats['storageSize'] / (1024 * 1024)
-            
-            print(f"💾 Размер коллекции: {collection_size_mb:.2f} MB")
-            print(f"💾 Размер хранилища: {storage_size_mb:.2f} MB")
-            
-            # Сохранение метаданных
-            mongodb_metadata = {
-                'setup_time': datetime.now().isoformat(),
-                'connection': {
-                    'host': 'localhost',
-                    'database': 'studmongo',
-                    'user': 'mongouser'
-                },
-                'collections': {
-                    'shipments': {
-                        'count': len(shipments_docs),
-                        'size_mb': round(collection_size_mb, 2),
-                        'storage_size_mb': round(storage_size_mb, 2),
-                        'avg_object_size': stats.get('avgObjSize', 0),
-                        'total_index_size_mb': round(stats.get('totalIndexSize', 0) / (1024 * 1024), 2)
-                    }
-                },
-                'indexes_created': [
-                    'tracking_number',
-                    'status', 
-                    'shipment_date',
-                    'warehouse_from.city',
-                    'warehouse_to.city',
-                    'route.start_city',
-                    'route.end_city'
-                ],
-                'data_structure': 'Документная с вложенными объектами',
-                'status': 'success'
+def measure_postgres_performance():
+    """Измерение производительности PostgreSQL"""
+    
+    conn_params = {
+        "dbname": "studpg",
+        "user": "student", 
+        "password": "Stud2024!!!",
+        "host": "postgresql",
+        "port": "5432"
+    }
+    
+    results = {}
+    
+    try:
+        conn = psycopg2.connect(**conn_params)
+        
+        # Запрос 1: Простой поиск по статусу
+        print("  📊 PostgreSQL: Простой поиск...")
+        start_time = time.time()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM shipments WHERE status = 'В пути'")
+            count = cur.fetchone()[0]
+        query1_time = time.time() - start_time
+        
+        # Запрос 2: Поиск с JOIN
+        print("  📊 PostgreSQL: Поиск с JOIN...")
+        start_time = time.time()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT s.tracking_number, wf.city, wt.city, r.distance
+                FROM shipments s
+                JOIN warehouses wf ON s.warehouse_from_id = wf.id
+                JOIN warehouses wt ON s.warehouse_to_id = wt.id  
+                JOIN routes r ON s.route_id = r.id
+                WHERE s.weight > 500
+                LIMIT 1000
+            """)
+            results_data = cur.fetchall()
+        query2_time = time.time() - start_time
+        
+        # Запрос 3: Агрегация
+        print("  📊 PostgreSQL: Агрегация...")
+        start_time = time.time()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT status, COUNT(*), AVG(weight), AVG(value)
+                FROM shipments 
+                GROUP BY status
+            """)
+            agg_results = cur.fetchall()
+        query3_time = time.time() - start_time
+        
+        results = {
+            'query1_simple_search': round(query1_time, 4),
+            'query2_join_search': round(query2_time, 4),
+            'query3_aggregation': round(query3_time, 4),
+            'records_found': {
+                'in_transit': count,
+                'heavy_shipments': len(results_data),
+                'status_groups': len(agg_results)
             }
+        }
+        
+        conn.close()
+        
+    except Exception as e:
+        print(f"  ❌ Ошибка PostgreSQL: {e}")
+        results = {'error': str(e)}
+    
+    return results
+
+def measure_mongodb_performance():
+    """Измерение производительности MongoDB"""
+    
+    results = {}
+    
+    mongo_client = get_mongo_client()
+    if not mongo_client:
+        return {'error': 'Не удалось подключиться к MongoDB'}
+    
+    try:
+        db = mongo_client['studmongo']
+        
+        # Запрос 1: Простой поиск по статусу
+        print("  📊 MongoDB: Простой поиск...")
+        start_time = time.time()
+        count = db.shipments.count_documents({"status": "В пути"})
+        query1_time = time.time() - start_time
+        
+        # Запрос 2: Поиск с "JOIN" (вложенные документы)
+        print("  📊 MongoDB: Поиск с вложенными документами...")
+        start_time = time.time()
+        results_data = list(db.shipments.find(
+            {"weight": {"$gt": 500}},
+            {
+                "tracking_number": 1,
+                "warehouse_from.city": 1,
+                "warehouse_to.city": 1, 
+                "route.distance": 1
+            }
+        ).limit(1000))
+        query2_time = time.time() - start_time
+        
+        # Запрос 3: Агрегация
+        print("  📊 MongoDB: Агрегация...")
+        start_time = time.time()
+        pipeline = [
+            {"$group": {
+                "_id": "$status",
+                "count": {"$sum": 1},
+                "avg_weight": {"$avg": "$weight"},
+                "avg_value": {"$avg": "$value"}
+            }}
+        ]
+        agg_results = list(db.shipments.aggregate(pipeline))
+        query3_time = time.time() - start_time
+        
+        results = {
+            'query1_simple_search': round(query1_time, 4),
+            'query2_nested_search': round(query2_time, 4),
+            'query3_aggregation': round(query3_time, 4),
+            'records_found': {
+                'in_transit': count,
+                'heavy_shipments': len(results_data),
+                'status_groups': len(agg_results)
+            }
+        }
+        
+        mongo_client.close()
+        
+    except Exception as e:
+        print(f"  ❌ Ошибка MongoDB: {e}")
+        results = {'error': str(e)}
+    
+    return results
+
+def compare_performance():
+    """Сравнение производительности PostgreSQL и MongoDB"""
+    
+    print("⚡ ЗАПУСК ТЕСТОВ ПРОИЗВОДИТЕЛЬНОСТИ")
+    print("=" * 50)
+    
+    # Загрузка метаданных о размерах
+    try:
+        with open('data/02_postgres_metadata.json', 'r') as f:
+            pg_meta = json.load(f)
+    except:
+        pg_meta = {'database_size': 'Неизвестно'}
+    
+    try:
+        with open('data/03_mongodb_metadata.json', 'r') as f:
+            mongo_meta = json.load(f)
+    except:
+        mongo_meta = {'collections': {'shipments': {'size_mb': 'Неизвестно'}}}
+    
+    # Измерение производительности
+    print("\n📊 PostgreSQL - выполнение запросов...")
+    pg_results = measure_postgres_performance()
+    
+    print("\n📊 MongoDB - выполнение запросов...")
+    mongo_results = measure_mongodb_performance()
+    
+    # Анализ результатов
+    comparison = {
+        'comparison_time': datetime.now().isoformat(),
+        'storage_comparison': {
+            'postgresql_size': pg_meta.get('database_size', 'Неизвестно'),
+            'mongodb_size': f"{mongo_meta.get('collections', {}).get('shipments', {}).get('size_mb', 'Неизвестно')} MB"
+        },
+        'performance_results': {
+            'postgresql': pg_results,
+            'mongodb': mongo_results
+        },
+        'analysis': {}
+    }
+    
+    # Сравнение времени выполнения
+    if 'error' not in pg_results and 'error' not in mongo_results:
+        query_mapping = {
+            'query1_simple_search': 'query1_simple_search',
+            'query2_join_search': 'query2_nested_search', 
+            'query3_aggregation': 'query3_aggregation'
+        }
+        
+        for pg_query, mongo_query in query_mapping.items():
+            pg_time = pg_results.get(pg_query)
+            mongo_time = mongo_results.get(mongo_query)
             
-            with open('data/03_mongodb_metadata.json', 'w', encoding='utf-8') as f:
-                json.dump(mongodb_metadata, f, ensure_ascii=False, indent=2)
+            if pg_time and mongo_time:
+                faster = 'PostgreSQL' if pg_time < mongo_time else 'MongoDB'
+                speedup = max(pg_time, mongo_time) / min(pg_time, mongo_time)
+                
+                comparison['analysis'][pg_query] = {
+                    'postgresql_time': pg_time,
+                    'mongodb_time': mongo_time,
+                    'faster': faster,
+                    'speedup_ratio': round(speedup, 2)
+                }
+    
+    # Сохранение результатов сравнения
+    with open('data/04_performance_comparison.json', 'w', encoding='utf-8') as f:
+        json.dump(comparison, f, ensure_ascii=False, indent=2)
+    
+    # Вывод результатов
+    print("\n📈 РЕЗУЛЬТАТЫ СРАВНЕНИЯ:")
+    print(f"💾 Размер данных:")
+    print(f"   - PostgreSQL: {comparison['storage_comparison']['postgresql_size']}")
+    print(f"   - MongoDB: {comparison['storage_comparison']['mongodb_size']}")
+    
+    if 'analysis' in comparison:
+        print("\n⏱️ Время выполнения запросов:")
+        for query, stats in comparison['analysis'].items():
+            query_name = {
+                'query1_simple_search': 'Простой поиск',
+                'query2_join_search': 'Сложный поиск', 
+                'query3_aggregation': 'Агрегация'
+            }.get(query, query)
             
-            print("✅ Метаданные сохранены в data/03_mongodb_metadata.json")
-            
-            mongo_client.close()
-            return mongodb_metadata
-            
-        except Exception as e:
-            print(f"❌ Ошибка при работе с MongoDB: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+            print(f"   {query_name}:")
+            print(f"     - PostgreSQL: {stats['postgresql_time']}с")
+            print(f"     - MongoDB: {stats['mongodb_time']}с")
+            print(f"     - Быстрее: {stats['faster']} (в {stats['speedup_ratio']} раз)")
+    
+    print("\n✅ Результаты сохранены в data/04_performance_comparison.json")
+    
+    return comparison
 
 if __name__ == "__main__":
-    setup_mongodb_database()
+    compare_performance()
