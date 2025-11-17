@@ -1,447 +1,224 @@
-import psycopg2
-from pymongo import MongoClient
-import time
-import json
-from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+import json
+from datetime import datetime
 
-def measure_time(func, *args, **kwargs):
-    """Измерение времени выполнения функции"""
-    start_time = time.time()
-    result = func(*args, **kwargs)
-    end_time = time.time()
-    return result, end_time - start_time
+def analyze_complexity():
+    """Анализ сложности реализации логистической системы"""
+    
+    print("АНАЛИЗ СЛОЖНОСТИ РЕАЛИЗАЦИИ ЛОГИСТИЧЕСКОЙ СИСТЕМЫ")
+    print("=" * 60)
 
-def get_mongo_client():
-    """Получение подключения к MongoDB с аутентификацией"""
-    try:
-        # Пробуем с аутентификацией (самый вероятный вариант)
-        client = MongoClient(
-            'mongodb://mongouser:mongopass@localhost:27017/',
-            serverSelectionTimeoutMS=2000
-        )
-        client.admin.command('ping')
-        print("Успешное подключение к MongoDB")
-        return client
-    except:
-        try:
-            # Пробуем через имя сервиса в Docker с аутентификацией
-            client = MongoClient(
-                'mongodb://mongouser:mongopass@mongodb:27017/',
-                serverSelectionTimeoutMS=2000
-            )
-            client.admin.command('ping')
-            print("Успешное подключение к MongoDB через Docker сервис")
-            return client
-        except:
-            try:
-                # Пробуем без аутентификации (на случай если она отключена)
-                client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=2000)
-                client.admin.command('ping')
-                print("Успешное подключение к MongoDB без аутентификации")
-                return client
-            except:
-                # Не выводим ошибку, просто возвращаем None
-                return None
+    # Подсчет сложности запросов для логистики
+    postgres_join_query = """
+SELECT s.tracking_number, s.status, s.weight, s.value,
+       wf.name as from_warehouse, wt.name as to_warehouse,
+       r.name as route_name
+FROM shipments s
+JOIN warehouses wf ON s.warehouse_from_id = wf.id
+JOIN warehouses wt ON s.warehouse_to_id = wt.id
+JOIN routes r ON s.route_id = r.id
+WHERE s.status = %s
+ORDER BY s.shipment_date DESC
+LIMIT 100
+""".strip().count('\n') + 1
 
-def get_postgres_shipments_by_weight(weight_threshold):
-    """Получение грузов по весу в PostgreSQL"""
-    conn_params = {
-        "dbname": "studpg",
-        "user": "postgres",
-        "password": "changeme", 
-        "host": "postgresql",
-        "port": "5432"
+    postgres_aggregation_query = """
+SELECT status, COUNT(*) as count, AVG(weight) as avg_weight, 
+       AVG(value) as avg_value, SUM(value) as total_value
+FROM shipments 
+GROUP BY status
+ORDER BY count DESC
+""".strip().count('\n') + 1
+
+    # MongoDB агрегационные пайплайны
+    mongodb_find_steps = 4  # find + projection + sort + limit
+    mongodb_aggregation_steps = 5  # $match + $group + $project + $sort + $limit
+
+    print(f"Сложность реализации логистических запросов:")
+    print(f"• PostgreSQL JOIN запрос: {postgres_join_query} строк")
+    print(f"• PostgreSQL агрегация: {postgres_aggregation_query} строк")
+    print(f"• MongoDB поиск: {mongodb_find_steps} этапов")
+    print(f"• MongoDB агрегация: {mongodb_aggregation_steps} этапов")
+
+    # Анализ читаемости
+    print(f"\nЧитаемость кода:")
+    print(f"• PostgreSQL: Высокая (стандартный SQL, знакомый синтаксис)")
+    print(f"• MongoDB: Средняя (требует знания агрегационных операторов)")
+
+    # Анализ поддерживаемости
+    print(f"\nПоддерживаемость:")
+    print(f"• PostgreSQL: Легко модифицировать (изменение SQL запросов)")
+    print(f"• MongoDB: Сложнее (изменение структуры пайплайнов)")
+
+    # Анализ производительности
+    print(f"\nПроизводительность:")
+    print(f"• PostgreSQL: Оптимизированные JOIN операции, индексы")
+    print(f"• MongoDB: Быстрые операции с документами, встроенные индексы")
+
+    # Создание визуализации
+    plt.style.use('seaborn-v0_8')
+    sns.set_palette("husl")
+
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+
+    # График сложности запросов
+    categories = ['JOIN запрос', 'Агрегация', 'Поиск', 'Сортировка']
+    postgres_scores = [postgres_join_query, postgres_aggregation_query, 3, 2]
+    mongodb_scores = [mongodb_find_steps, mongodb_aggregation_steps, 4, 3]
+
+    x = np.arange(len(categories))
+    width = 0.35
+
+    bars1 = ax1.bar(x - width/2, postgres_scores, width, label='PostgreSQL', color='blue', alpha=0.7)
+    bars2 = ax1.bar(x + width/2, mongodb_scores, width, label='MongoDB', color='orange', alpha=0.7)
+    ax1.set_xlabel('Типы операций')
+    ax1.set_ylabel('Сложность (строки/этапы)')
+    ax1.set_title('Сравнение сложности реализации запросов')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(categories)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Добавляем значения на столбцы
+    for bar in bars1:
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                 f'{int(height)}', ha='center', va='bottom')
+    for bar in bars2:
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                 f'{int(height)}', ha='center', va='bottom')
+
+    # График производительности операций для логистики
+    operations = ['Вставка данных', 'Поиск по индексу', 'Сложный JOIN', 'Агрегация', 'Обновление']
+    pg_performance = [8, 9, 9, 8, 7]  # Оценка по 10-балльной шкале
+    mongo_performance = [9, 8, 6, 7, 9]
+
+    line1 = ax2.plot(operations, pg_performance, 'o-', label='PostgreSQL', linewidth=2, markersize=8, color='blue')
+    line2 = ax2.plot(operations, mongo_performance, 's-', label='MongoDB', linewidth=2, markersize=8, color='orange')
+    ax2.set_xlabel('Операции с данными')
+    ax2.set_ylabel('Производительность (1-10)')
+    ax2.set_title('Производительность операций в логистике')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_ylim(0, 10)
+
+    # Добавляем значения на точки
+    for i, (pg_val, mongo_val) in enumerate(zip(pg_performance, mongo_performance)):
+        ax2.text(i, pg_val + 0.2, str(pg_val), ha='center', va='bottom', color='blue')
+        ax2.text(i, mongo_val - 0.3, str(mongo_val), ha='center', va='top', color='orange')
+
+    # График гибкости для логистики
+    aspects = ['Схема данных', 'Масштабирование', 'Геоданные', 'Индексирование', 'Резервное копирование']
+    pg_flexibility = [6, 7, 9, 9, 9]
+    mongo_flexibility = [9, 8, 7, 8, 7]
+
+    x_flex = np.arange(len(aspects))
+
+    bars3 = ax3.bar(x_flex - width/2, pg_flexibility, width, label='PostgreSQL', color='blue', alpha=0.7)
+    bars4 = ax3.bar(x_flex + width/2, mongo_flexibility, width, label='MongoDB', color='orange', alpha=0.7)
+    ax3.set_xlabel('Аспекты системы')
+    ax3.set_ylabel('Оценка гибкости (1-10)')
+    ax3.set_title('Гибкость для логистической системы')
+    ax3.set_xticks(x_flex)
+    ax3.set_xticklabels(aspects, rotation=45, ha='right')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # Добавляем значения на столбцы
+    for bar in bars3:
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                 f'{int(height)}', ha='center', va='bottom')
+    for bar in bars4:
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                 f'{int(height)}', ha='center', va='bottom')
+
+    # Общая оценка для логистики
+    overall_categories = ['Производительность', 'Гибкость', 'Надежность', 'Масштабируемость', 'Стоимость']
+    pg_overall = [8.5, 6.5, 9.0, 7.5, 8.0]
+    mongo_overall = [7.5, 8.5, 7.0, 8.5, 7.0]
+
+    x_overall = np.arange(len(overall_categories))
+
+    bars5 = ax4.bar(x_overall - width/2, pg_overall, width, label='PostgreSQL', color='blue', alpha=0.7)
+    bars6 = ax4.bar(x_overall + width/2, mongo_overall, width, label='MongoDB', color='orange', alpha=0.7)
+    ax4.set_xlabel('Критерии оценки')
+    ax4.set_ylabel('Оценка (1-10)')
+    ax4.set_title('Общая оценка для логистической системы')
+    ax4.set_xticks(x_overall)
+    ax4.set_xticklabels(overall_categories)
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    # Добавляем значения на столбцы
+    for bar in bars5:
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                 f'{height:.1f}', ha='center', va='bottom')
+    for bar in bars6:
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                 f'{height:.1f}', ha='center', va='bottom')
+
+    plt.tight_layout()
+    plt.savefig('data/06_complexity_analysis.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    # Итоговые выводы для логистики
+    print(f"\nИТОГОВЫЕ ВЫВОДЫ ДЛЯ ЛОГИСТИЧЕСКОЙ СИСТЕМЫ:")
+    print(f"=" * 50)
+    print(f"PostgreSQL лучше для логистики когда:")
+    print(f"  • Требуются сложные JOIN между грузами, складами и маршрутами")
+    print(f"  • Нужны транзакции для финансовых операций")
+    print(f"  • Важна согласованность данных в реальном времени")
+    print(f"  • Требуется аналитика с агрегациями")
+    print(f"  • Работа с геоданными и пространственными запросами")
+
+    print(f"\nMongoDB лучше для логистики когда:")
+    print(f"  • Схема данных часто меняется (новые типы грузов, атрибуты)")
+    print(f"  • Требуется горизонтальное масштабирование")
+    print(f"  • Данные имеют иерархическую структуру")
+    print(f"  • Нужна быстрая разработка прототипов")
+    print(f"  • Операции в основном чтение с простыми фильтрами")
+
+    print(f"\nРекомендации для логистических систем:")
+    print(f"  • Для трекинга грузов: PostgreSQL (JOIN запросы)")
+    print(f"  • Для аналитики доставки: PostgreSQL (агрегации)")
+    print(f"  • Для мобильного приложения: MongoDB (гибкая схема)")
+    print(f"  • Для больших объемов данных: оба в зависимости от паттернов доступа")
+    print(f"  • Для enterprise-систем: PostgreSQL (надежность и ACID)")
+
+    # Сохранение анализа
+    complexity_analysis = {
+        'analysis_time': datetime.now().isoformat(),
+        'complexity_metrics': {
+            'postgresql_join_lines': postgres_join_query,
+            'postgresql_aggregation_lines': postgres_aggregation_query,
+            'mongodb_find_steps': mongodb_find_steps,
+            'mongodb_aggregation_steps': mongodb_aggregation_steps
+        },
+        'performance_scores': {
+            'postgresql': pg_performance,
+            'mongodb': mongo_performance
+        },
+        'flexibility_scores': {
+            'postgresql': pg_flexibility,
+            'mongodb': mongo_flexibility
+        },
+        'overall_scores': {
+            'postgresql': pg_overall,
+            'mongodb': mongo_overall
+        }
     }
-    
-    try:
-        conn = psycopg2.connect(**conn_params)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT s.tracking_number, s.weight, s.value, wf.city, wt.city
-                FROM shipments s
-                JOIN warehouses wf ON s.warehouse_from_id = wf.id
-                JOIN warehouses wt ON s.warehouse_to_id = wt.id  
-                WHERE s.weight > %s
-                ORDER BY s.weight DESC
-                LIMIT 100
-            """, (weight_threshold,))
-            return cur.fetchall()
-    except Exception as e:
-        print(f"Ошибка PostgreSQL: {e}")
-        return []
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
-def get_mongodb_shipments_by_weight(weight_threshold):
-    """Получение грузов по весу в MongoDB"""
-    mongo_client = get_mongo_client()
-    if not mongo_client:
-        return []
-    
-    try:
-        # Получаем базу данных с аутентификацией
-        db = mongo_client['studmongo']
-        # Проверяем доступ к коллекции
-        results = list(db.shipments.find(
-            {"weight": {"$gt": weight_threshold}},
-            {
-                "tracking_number": 1,
-                "weight": 1,
-                "value": 1,
-                "warehouse_from.city": 1,
-                "warehouse_to.city": 1
-            }
-        ).sort("weight", -1).limit(100))
-        return results
-    except Exception as e:
-        print(f"Ошибка доступа к MongoDB: {e}")
-        return []
-    finally:
-        mongo_client.close()
+    with open('data/06_complexity_analysis.json', 'w', encoding='utf-8') as f:
+        json.dump(complexity_analysis, f, ensure_ascii=False, indent=2)
 
-def get_postgres_shipments_by_city(city):
-    """Получение грузов по городу назначения в PostgreSQL"""
-    conn_params = {
-        "dbname": "studpg",
-        "user": "postgres",
-        "password": "changeme", 
-        "host": "postgresql",
-        "port": "5432"
-    }
-    
-    try:
-        conn = psycopg2.connect(**conn_params)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT s.tracking_number, s.status, s.weight, wf.name, wt.name
-                FROM shipments s
-                JOIN warehouses wf ON s.warehouse_from_id = wf.id
-                JOIN warehouses wt ON s.warehouse_to_id = wt.id
-                WHERE wt.city = %s
-                ORDER BY s.shipment_date DESC
-                LIMIT 100
-            """, (city,))
-            return cur.fetchall()
-    except Exception as e:
-        print(f"Ошибка PostgreSQL: {e}")
-        return []
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    print("\nАнализ сложности сохранен в data/06_complexity_analysis.json")
 
-def get_mongodb_shipments_by_city(city):
-    """Получение грузов по городу назначения в MongoDB"""
-    mongo_client = get_mongo_client()
-    if not mongo_client:
-        return []
-    
-    try:
-        db = mongo_client['studmongo']
-        results = list(db.shipments.find(
-            {"warehouse_to.city": city},
-            {
-                "tracking_number": 1,
-                "status": 1,
-                "weight": 1,
-                "warehouse_from.name": 1,
-                "warehouse_to.name": 1
-            }
-        ).sort("shipment_date", -1).limit(100))
-        return results
-    except Exception as e:
-        print(f"Ошибка доступа к MongoDB: {e}")
-        return []
-    finally:
-        mongo_client.close()
-
-def get_postgres_aggregation():
-    """Агрегация данных в PostgreSQL"""
-    conn_params = {
-        "dbname": "studpg",
-        "user": "postgres",
-        "password": "changeme", 
-        "host": "postgresql",
-        "port": "5432"
-    }
-    
-    try:
-        conn = psycopg2.connect(**conn_params)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT 
-                    status,
-                    COUNT(*) as count,
-                    AVG(weight) as avg_weight,
-                    AVG(value) as avg_value,
-                    SUM(value) as total_value
-                FROM shipments 
-                GROUP BY status
-                ORDER BY count DESC
-            """)
-            return cur.fetchall()
-    except Exception as e:
-        print(f"Ошибка PostgreSQL: {e}")
-        return []
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-def get_mongodb_aggregation():
-    """Агрегация данных в MongoDB"""
-    mongo_client = get_mongo_client()
-    if not mongo_client:
-        return []
-    
-    try:
-        db = mongo_client['studmongo']
-        pipeline = [
-            {"$group": {
-                "_id": "$status",
-                "count": {"$sum": 1},
-                "avg_weight": {"$avg": "$weight"},
-                "avg_value": {"$avg": "$value"},
-                "total_value": {"$sum": "$value"}
-            }},
-            {"$sort": {"count": -1}}
-        ]
-        results = list(db.shipments.aggregate(pipeline))
-        return results
-    except Exception as e:
-        print(f"Ошибка доступа к MongoDB: {e}")
-        return []
-    finally:
-        mongo_client.close()
-
-# Сравнение производительности PostgreSQL и MongoDB
-print("СРАВНЕНИЕ ПРОИЗВОДИТЕЛЬНОСТИ ЛОГИСТИЧЕСКИХ СИСТЕМ")
-print("=" * 60)
-
-# Проверяем доступность подключений
-print("Проверка подключений...")
-print("PostgreSQL подключен")
-
-mongo_client = get_mongo_client()
-mongo_available = mongo_client is not None
-
-if mongo_available:
-    print("MongoDB доступен для тестирования")
-else:
-    print("MongoDB недоступен, тестируем только PostgreSQL")
-
-# Тестирование разных весовых категорий
-test_weights = [100, 300, 500, 700, 900]
-postgres_times = []
-mongodb_times = []
-
-print(f"\nТЕСТИРОВАНИЕ ЗАПРОСОВ ПО ВЕСУ ГРУЗОВ")
-
-for weight in test_weights:
-    print(f"\nТест: Грузы тяжелее {weight}кг:")
-    
-    # PostgreSQL
-    _, pg_time = measure_time(get_postgres_shipments_by_weight, weight)
-    postgres_times.append(pg_time)
-    print(f"  PostgreSQL: {pg_time:.4f} сек")
-    
-    # MongoDB (только если доступен)
-    if mongo_available:
-        _, mongo_time = measure_time(get_mongodb_shipments_by_weight, weight)
-        mongodb_times.append(mongo_time)
-        print(f"  MongoDB: {mongo_time:.4f} сек")
-        
-        # Сравнение
-        if pg_time > 0 and mongo_time > 0:
-            if pg_time < mongo_time:
-                faster = "PostgreSQL"
-                speedup = mongo_time / pg_time
-            else:
-                faster = "MongoDB"
-                speedup = pg_time / mongo_time
-            
-            print(f"  Быстрее: {faster} (в {speedup:.2f} раз)")
-        else:
-            print(f"  Невозможно сравнить")
-    else:
-        mongodb_times.append(0)
-        print(f"  MongoDB: --")
-
-# Визуализация результатов
-plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
-
-plt.figure(figsize=(12, 8))
-
-# График времени выполнения
-plt.subplot(2, 2, 1)
-plt.plot(test_weights, postgres_times, 'o-', label='PostgreSQL', linewidth=2, markersize=8)
-
-if mongo_available and any(t > 0 for t in mongodb_times):
-    plt.plot(test_weights, mongodb_times, 's-', label='MongoDB', linewidth=2, markersize=8)
-
-plt.xlabel('Вес груза (кг)')
-plt.ylabel('Время выполнения (секунды)')
-plt.title('Время выполнения запросов по весу груза')
-plt.legend()
-plt.grid(True, alpha=0.3)
-
-# График соотношения производительности (только если MongoDB доступен и есть данные)
-plt.subplot(2, 2, 2)
-valid_pairs = [(pg, mongo) for pg, mongo in zip(postgres_times, mongodb_times) if pg > 0 and mongo > 0]
-
-if mongo_available and len(valid_pairs) > 0:
-    speedup_ratio = [mongo_time / pg_time for pg_time, mongo_time in valid_pairs]
-    valid_weights = [test_weights[i] for i, (pg, mongo) in enumerate(zip(postgres_times, mongodb_times)) if pg > 0 and mongo > 0]
-    
-    plt.bar(range(len(valid_weights)), speedup_ratio, color=['green' if x > 1 else 'red' for x in speedup_ratio])
-    plt.xlabel('Вес груза (кг)')
-    plt.ylabel('Соотношение времени (MongoDB/PostgreSQL)')
-    plt.title('Соотношение производительности')
-    plt.xticks(range(len(valid_weights)), valid_weights)
-    plt.axhline(y=1, color='black', linestyle='--', alpha=0.5)
-    plt.grid(True, alpha=0.3)
-else:
-    plt.text(0.5, 0.5, 'MongoDB недоступен\nдля сравнения', 
-             ha='center', va='center', fontsize=12,
-             bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
-    plt.axis('off')
-
-# Статистика
-plt.subplot(2, 2, 3)
-avg_pg_time = np.mean([t for t in postgres_times if t > 0])
-std_pg_time = np.std([t for t in postgres_times if t > 0])
-
-databases = ['PostgreSQL']
-avg_times = [avg_pg_time]
-std_times = [std_pg_time]
-
-if mongo_available and any(t > 0 for t in mongodb_times):
-    avg_mongo_time = np.mean([t for t in mongodb_times if t > 0])
-    std_mongo_time = np.std([t for t in mongodb_times if t > 0])
-    databases.append('MongoDB')
-    avg_times.append(avg_mongo_time)
-    std_times.append(std_mongo_time)
-
-bars = plt.bar(databases, avg_times, yerr=std_times, capsize=5, color=['blue', 'orange'][:len(databases)])
-plt.ylabel('Среднее время выполнения (секунды)')
-plt.title('Средняя производительность')
-plt.grid(True, alpha=0.3)
-
-# Добавляем значения на столбцы
-for bar, avg, std in zip(bars, avg_times, std_times):
-    plt.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
-            f'{avg:.4f}±{std:.4f}', ha='center', va='bottom', fontsize=9)
-
-# Выводы
-plt.subplot(2, 2, 4)
-plt.axis('off')
-
-# Тестируем дополнительные запросы для выводов
-print(f"\nДОПОЛНИТЕЛЬНЫЕ ТЕСТЫ:")
-
-# Тест по городам
-cities = ['Москва', 'Санкт-Петербург']
-city_pg_times = []
-city_mongo_times = []
-
-for city in cities:
-    _, pg_time = measure_time(get_postgres_shipments_by_city, city)
-    city_pg_times.append(pg_time)
-    
-    if mongo_available:
-        _, mongo_time = measure_time(get_mongodb_shipments_by_city, city)
-        city_mongo_times.append(mongo_time)
-        if mongo_time > 0:
-            print(f"  Город {city}: PostgreSQL {pg_time:.4f}с, MongoDB {mongo_time:.4f}с")
-        else:
-            print(f"  Город {city}: PostgreSQL {pg_time:.4f}с, MongoDB --")
-    else:
-        print(f"  Город {city}: PostgreSQL {pg_time:.4f}с")
-
-# Тест агрегации
-_, pg_agg_time = measure_time(get_postgres_aggregation)
-
-if mongo_available:
-    _, mongo_agg_time = measure_time(get_mongodb_aggregation)
-    if mongo_agg_time > 0:
-        print(f"  Агрегация: PostgreSQL {pg_agg_time:.4f}с, MongoDB {mongo_agg_time:.4f}с")
-    else:
-        print(f"  Агрегация: PostgreSQL {pg_agg_time:.4f}с, MongoDB --")
-else:
-    print(f"  Агрегация: PostgreSQL {pg_agg_time:.4f}с")
-
-# Формируем текст выводов
-if mongo_available and any(t > 0 for t in mongodb_times):
-    conclusion_text = f"""
-АНАЛИЗ РЕЗУЛЬТАТОВ ЛОГИСТИЧЕСКОЙ СИСТЕМЫ:
-
-Средняя производительность:
-• PostgreSQL: {avg_pg_time:.4f} ± {std_pg_time:.4f} сек
-• MongoDB: {avg_mongo_time:.4f} ± {std_mongo_time:.4f} сек
-
-Общее соотношение:
-• PostgreSQL быстрее в {avg_mongo_time/avg_pg_time:.2f} раз
-• Стабильность: {'PostgreSQL' if std_pg_time < std_mongo_time else 'MongoDB'}
-
-Рекомендации для логистики:
-• Для фильтрации по весу: {'PostgreSQL' if avg_pg_time < avg_mongo_time else 'MongoDB'}
-• Для поиска по городам: {'PostgreSQL' if np.mean(city_pg_times) < np.mean([t for t in city_mongo_times if t > 0]) else 'MongoDB'}
-• Для агрегаций: {'PostgreSQL' if pg_agg_time < mongo_agg_time else 'MongoDB'}
-"""
-else:
-    conclusion_text = f"""
-АНАЛИЗ РЕЗУЛЬТАТОВ ЛОГИСТИЧЕСКОЙ СИСТЕМЫ:
-
-Производительность PostgreSQL:
-• Среднее время: {avg_pg_time:.4f} ± {std_pg_time:.4f} сек
-• Стабильность: хорошая
-
-Рекомендации:
-• MongoDB недоступен для сравнения
-• PostgreSQL показал стабильную производительность
-• Для логистических запросов рекомендуется PostgreSQL
-"""
-
-plt.text(0.1, 0.5, conclusion_text, fontsize=10, verticalalignment='center',
-         bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.8))
-
-plt.tight_layout()
-plt.savefig('data/05_performance_comparison.png', dpi=300, bbox_inches='tight')
-plt.show()
-
-# Детальная статистика
-print(f"\nДЕТАЛЬНАЯ СТАТИСТИКА:")
-print(f"PostgreSQL - Среднее: {avg_pg_time:.4f}с, Стд. отклонение: {std_pg_time:.4f}с")
-
-if mongo_available and any(t > 0 for t in mongodb_times):
-    print(f"MongoDB - Среднее: {avg_mongo_time:.4f}с, Стд. отклонение: {std_mongo_time:.4f}с")
-    print(f"Общее ускорение PostgreSQL: {avg_mongo_time/avg_pg_time:.2f}x")
-
-# Сохранение результатов
-performance_results = {
-    'comparison_time': datetime.now().isoformat(),
-    'mongo_available': mongo_available,
-    'mongo_working': mongo_available and any(t > 0 for t in mongodb_times),
-    'weight_tests': {
-        'weights': test_weights,
-        'postgresql_times': postgres_times,
-        'mongodb_times': mongodb_times if mongo_available else []
-    },
-    'statistics': {
-        'postgresql_avg': avg_pg_time,
-        'postgresql_std': std_pg_time,
-        'mongodb_avg': avg_mongo_time if mongo_available and any(t > 0 for t in mongodb_times) else 0,
-        'mongodb_std': std_mongo_time if mongo_available and any(t > 0 for t in mongodb_times) else 0
-    }
-}
-
-with open('data/05_performance_results.json', 'w', encoding='utf-8') as f:
-    json.dump(performance_results, f, ensure_ascii=False, indent=2)
-
-print("Результаты сохранены в data/05_performance_results.json")
-
-if mongo_client:
-    mongo_client.close()
+if __name__ == "__main__":
+    analyze_complexity()
