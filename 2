@@ -15,24 +15,32 @@ def measure_time(func, *args, **kwargs):
     return result, end_time - start_time
 
 def get_mongo_client():
-    """Получение подключения к MongoDB (тихая проверка)"""
+    """Получение подключения к MongoDB с аутентификацией"""
     try:
-        # Пробуем разные варианты подключения
-        client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=2000)
+        # Пробуем с аутентификацией (самый вероятный вариант)
+        client = MongoClient(
+            'mongodb://mongouser:mongopass@localhost:27017/',
+            serverSelectionTimeoutMS=2000
+        )
         client.admin.command('ping')
-        print("✅ MongoDB подключен")
+        print("✅ MongoDB подключен с аутентификацией")
         return client
     except:
         try:
-            client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/', serverSelectionTimeoutMS=2000)
+            # Пробуем через имя сервиса в Docker с аутентификацией
+            client = MongoClient(
+                'mongodb://mongouser:mongopass@mongodb:27017/',
+                serverSelectionTimeoutMS=2000
+            )
             client.admin.command('ping')
-            print("✅ MongoDB подключен")
+            print("✅ MongoDB подключен через Docker сервис")
             return client
         except:
             try:
-                client = MongoClient('mongodb://mongodb:27017/', serverSelectionTimeoutMS=2000)
+                # Пробуем без аутентификации (на случай если она отключена)
+                client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=2000)
                 client.admin.command('ping')
-                print("✅ MongoDB подключен")
+                print("✅ MongoDB подключен без аутентификации")
                 return client
             except:
                 # Не выводим ошибку, просто возвращаем None
@@ -75,7 +83,9 @@ def get_mongodb_shipments_by_weight(weight_threshold):
         return []
     
     try:
+        # Получаем базу данных с аутентификацией
         db = mongo_client['studmongo']
+        # Проверяем доступ к коллекции
         results = list(db.shipments.find(
             {"weight": {"$gt": weight_threshold}},
             {
@@ -87,7 +97,8 @@ def get_mongodb_shipments_by_weight(weight_threshold):
             }
         ).sort("weight", -1).limit(100))
         return results
-    except Exception:
+    except Exception as e:
+        print(f"❌ Ошибка доступа к MongoDB: {e}")
         return []
     finally:
         mongo_client.close()
@@ -141,7 +152,8 @@ def get_mongodb_shipments_by_city(city):
             }
         ).sort("shipment_date", -1).limit(100))
         return results
-    except Exception:
+    except Exception as e:
+        print(f"❌ Ошибка доступа к MongoDB: {e}")
         return []
     finally:
         mongo_client.close()
@@ -198,7 +210,8 @@ def get_mongodb_aggregation():
         ]
         results = list(db.shipments.aggregate(pipeline))
         return results
-    except Exception:
+    except Exception as e:
+        print(f"❌ Ошибка доступа к MongoDB: {e}")
         return []
     finally:
         mongo_client.close()
@@ -241,14 +254,17 @@ for weight in test_weights:
         print(f"  MongoDB: {mongo_time:.4f} сек")
         
         # Сравнение
-        if pg_time < mongo_time:
-            faster = "PostgreSQL"
-            speedup = mongo_time / pg_time
+        if pg_time > 0 and mongo_time > 0:
+            if pg_time < mongo_time:
+                faster = "PostgreSQL"
+                speedup = mongo_time / pg_time
+            else:
+                faster = "MongoDB"
+                speedup = pg_time / mongo_time
+            
+            print(f"  🏆 Быстрее: {faster} (в {speedup:.2f} раз)")
         else:
-            faster = "MongoDB"
-            speedup = pg_time / mongo_time
-        
-        print(f"  🏆 Быстрее: {faster} (в {speedup:.2f} раз)")
+            print(f"  ⚠️ Невозможно сравнить")
     else:
         mongodb_times.append(0)
         print(f"  MongoDB: --")
@@ -263,7 +279,7 @@ plt.figure(figsize=(12, 8))
 plt.subplot(2, 2, 1)
 plt.plot(test_weights, postgres_times, 'o-', label='PostgreSQL', linewidth=2, markersize=8)
 
-if mongo_available:
+if mongo_available and any(t > 0 for t in mongodb_times):
     plt.plot(test_weights, mongodb_times, 's-', label='MongoDB', linewidth=2, markersize=8)
 
 plt.xlabel('Вес груза (кг)')
@@ -272,15 +288,19 @@ plt.title('Время выполнения запросов по весу гру
 plt.legend()
 plt.grid(True, alpha=0.3)
 
-# График соотношения производительности (только если MongoDB доступен)
+# График соотношения производительности (только если MongoDB доступен и есть данные)
 plt.subplot(2, 2, 2)
-if mongo_available:
-    speedup_ratio = [mongo_time / pg_time for pg_time, mongo_time in zip(postgres_times, mongodb_times)]
-    plt.bar(range(len(test_weights)), speedup_ratio, color=['green' if x > 1 else 'red' for x in speedup_ratio])
+valid_pairs = [(pg, mongo) for pg, mongo in zip(postgres_times, mongodb_times) if pg > 0 and mongo > 0]
+
+if mongo_available and len(valid_pairs) > 0:
+    speedup_ratio = [mongo_time / pg_time for pg_time, mongo_time in valid_pairs]
+    valid_weights = [test_weights[i] for i, (pg, mongo) in enumerate(zip(postgres_times, mongodb_times)) if pg > 0 and mongo > 0]
+    
+    plt.bar(range(len(valid_weights)), speedup_ratio, color=['green' if x > 1 else 'red' for x in speedup_ratio])
     plt.xlabel('Вес груза (кг)')
     plt.ylabel('Соотношение времени (MongoDB/PostgreSQL)')
     plt.title('Соотношение производительности')
-    plt.xticks(range(len(test_weights)), test_weights)
+    plt.xticks(range(len(valid_weights)), valid_weights)
     plt.axhline(y=1, color='black', linestyle='--', alpha=0.5)
     plt.grid(True, alpha=0.3)
 else:
@@ -291,16 +311,16 @@ else:
 
 # Статистика
 plt.subplot(2, 2, 3)
-avg_pg_time = np.mean(postgres_times)
-std_pg_time = np.std(postgres_times)
+avg_pg_time = np.mean([t for t in postgres_times if t > 0])
+std_pg_time = np.std([t for t in postgres_times if t > 0])
 
 databases = ['PostgreSQL']
 avg_times = [avg_pg_time]
 std_times = [std_pg_time]
 
-if mongo_available:
-    avg_mongo_time = np.mean(mongodb_times)
-    std_mongo_time = np.std(mongodb_times)
+if mongo_available and any(t > 0 for t in mongodb_times):
+    avg_mongo_time = np.mean([t for t in mongodb_times if t > 0])
+    std_mongo_time = np.std([t for t in mongodb_times if t > 0])
     databases.append('MongoDB')
     avg_times.append(avg_mongo_time)
     std_times.append(std_mongo_time)
@@ -334,7 +354,10 @@ for city in cities:
     if mongo_available:
         _, mongo_time = measure_time(get_mongodb_shipments_by_city, city)
         city_mongo_times.append(mongo_time)
-        print(f"  Город {city}: PostgreSQL {pg_time:.4f}с, MongoDB {mongo_time:.4f}с")
+        if mongo_time > 0:
+            print(f"  Город {city}: PostgreSQL {pg_time:.4f}с, MongoDB {mongo_time:.4f}с")
+        else:
+            print(f"  Город {city}: PostgreSQL {pg_time:.4f}с, MongoDB --")
     else:
         print(f"  Город {city}: PostgreSQL {pg_time:.4f}с")
 
@@ -343,12 +366,15 @@ _, pg_agg_time = measure_time(get_postgres_aggregation)
 
 if mongo_available:
     _, mongo_agg_time = measure_time(get_mongodb_aggregation)
-    print(f"  Агрегация: PostgreSQL {pg_agg_time:.4f}с, MongoDB {mongo_agg_time:.4f}с")
+    if mongo_agg_time > 0:
+        print(f"  Агрегация: PostgreSQL {pg_agg_time:.4f}с, MongoDB {mongo_agg_time:.4f}с")
+    else:
+        print(f"  Агрегация: PostgreSQL {pg_agg_time:.4f}с, MongoDB --")
 else:
     print(f"  Агрегация: PostgreSQL {pg_agg_time:.4f}с")
 
 # Формируем текст выводов
-if mongo_available:
+if mongo_available and any(t > 0 for t in mongodb_times):
     conclusion_text = f"""
 📈 АНАЛИЗ РЕЗУЛЬТАТОВ ЛОГИСТИЧЕСКОЙ СИСТЕМЫ:
 
@@ -362,7 +388,7 @@ if mongo_available:
 
 🎯 Рекомендации для логистики:
 • Для фильтрации по весу: {'PostgreSQL' if avg_pg_time < avg_mongo_time else 'MongoDB'}
-• Для поиска по городам: {'PostgreSQL' if np.mean(city_pg_times) < np.mean(city_mongo_times) else 'MongoDB'}
+• Для поиска по городам: {'PostgreSQL' if np.mean(city_pg_times) < np.mean([t for t in city_mongo_times if t > 0]) else 'MongoDB'}
 • Для агрегаций: {'PostgreSQL' if pg_agg_time < mongo_agg_time else 'MongoDB'}
 """
 else:
@@ -390,7 +416,7 @@ plt.show()
 print(f"\n📋 ДЕТАЛЬНАЯ СТАТИСТИКА:")
 print(f"PostgreSQL - Среднее: {avg_pg_time:.4f}с, Стд. отклонение: {std_pg_time:.4f}с")
 
-if mongo_available:
+if mongo_available and any(t > 0 for t in mongodb_times):
     print(f"MongoDB - Среднее: {avg_mongo_time:.4f}с, Стд. отклонение: {std_mongo_time:.4f}с")
     print(f"Общее ускорение PostgreSQL: {avg_mongo_time/avg_pg_time:.2f}x")
 
@@ -398,6 +424,7 @@ if mongo_available:
 performance_results = {
     'comparison_time': datetime.now().isoformat(),
     'mongo_available': mongo_available,
+    'mongo_working': mongo_available and any(t > 0 for t in mongodb_times),
     'weight_tests': {
         'weights': test_weights,
         'postgresql_times': postgres_times,
@@ -406,8 +433,8 @@ performance_results = {
     'statistics': {
         'postgresql_avg': avg_pg_time,
         'postgresql_std': std_pg_time,
-        'mongodb_avg': avg_mongo_time if mongo_available else 0,
-        'mongodb_std': std_mongo_time if mongo_available else 0
+        'mongodb_avg': avg_mongo_time if mongo_available and any(t > 0 for t in mongodb_times) else 0,
+        'mongodb_std': std_mongo_time if mongo_available and any(t > 0 for t in mongodb_times) else 0
     }
 }
 
