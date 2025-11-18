@@ -1,425 +1,96 @@
-import psycopg2
-from pymongo import MongoClient
 import matplotlib.pyplot as plt
-import numpy as np
-import seaborn as sns
 import json
-from datetime import datetime
-import subprocess
-import sys
-import time
 
-def get_mongo_client():
-    """Безопасное получение подключения к MongoDB с повторными попытками"""
-    max_attempts = 5
-    wait_time = 2
+def create_storage_comparison_chart():
+    """Создание графика сравнения занимаемого пространства"""
     
-    for attempt in range(1, max_attempts + 1):
-        try:
-            print(f"Попытка подключения к MongoDB {attempt}/{max_attempts}...")
-            
-            # Первая попытка - стандартное подключение
-            client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=3000)
-            client.admin.command('ping')
-            print("✅ Успешное подключение к MongoDB")
-            return client
-        except:
-            try:
-                # Вторая попытка - с аутентификацией
-                client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/', serverSelectionTimeoutMS=3000)
-                client.admin.command('ping')
-                print("✅ Успешное подключение к MongoDB (с аутентификацией)")
-                return client
-            except:
-                if attempt < max_attempts:
-                    print(f"❌ Неудачная попытка подключения {attempt}, повтор через {wait_time} сек...")
-                    time.sleep(wait_time)
-                    wait_time *= 2  # Экспоненциальная задержка
-                else:
-                    print("❌ Не удалось подключиться к MongoDB после всех попыток")
-                    return None
-
-def check_mongo_container():
-    """Проверка статуса MongoDB контейнера через Docker"""
+    # Загрузка метаданных о размерах
     try:
-        result = subprocess.run(['docker', 'ps', '--filter', 'name=mongodb', '--format', '{{.Names}}::{{.Status}}'], 
-                              capture_output=True, text=True)
-        if result.stdout.strip():
-            container_info = result.stdout.strip()
-            print(f"✅ MongoDB контейнер: {container_info}")
-            return True
+        with open('data/02_postgres_metadata.json', 'r') as f:
+            pg_meta = json.load(f)
+        
+        with open('data/03_mongodb_metadata.json', 'r') as f:
+            mongo_meta = json.load(f)
+        
+        # Извлечение данных о размерах
+        pg_size_str = pg_meta.get('database_size', '0 MB')
+        mongo_size_str = f"{mongo_meta['collections']['shipments']['size_mb']} MB"
+        
+        # Парсинг размеров (предполагаем формат "XX MB")
+        pg_size_mb = float(pg_size_str.split()[0])
+        mongo_size_mb = float(mongo_size_str.split()[0])
+        
+        # Данные для графика
+        databases = ['PostgreSQL', 'MongoDB']
+        sizes_mb = [pg_size_mb, mongo_size_mb]
+        colors = ['#3366cc', '#dc3912']
+        
+        # Создание графика
+        plt.figure(figsize=(10, 6))
+        
+        # Столбчатая диаграмма
+        bars = plt.bar(databases, sizes_mb, color=colors, alpha=0.8, width=0.6)
+        
+        # Добавление значений на столбцы
+        for bar, size in zip(bars, sizes_mb):
+            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
+                    f'{size} MB', ha='center', va='bottom', fontsize=12, fontweight='bold')
+        
+        # Настройка графика
+        plt.title('Сравнение занимаемого пространства базами данных', fontsize=14, fontweight='bold', pad=20)
+        plt.ylabel('Размер (MB)', fontsize=12)
+        plt.grid(axis='y', alpha=0.3)
+        plt.ylim(0, max(sizes_mb) * 1.2)
+        
+        # Расчет разницы
+        difference = pg_size_mb - mongo_size_mb
+        difference_percent = (difference / mongo_size_mb) * 100
+        
+        # Добавление аннотации с разницей
+        if difference > 0:
+            plt.annotate(f'PostgreSQL занимает на {difference:.1f} MB ({difference_percent:.1f}%) больше',
+                        xy=(0.5, 0.95), xycoords='axes fraction',
+                        ha='center', fontsize=11, style='italic',
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", alpha=0.7))
         else:
-            print("❌ MongoDB контейнер не запущен")
-            return False
-    except:
-        print("❌ Docker не доступен")
-        return False
-
-def get_postgres_storage_info():
-    """Получение информации о размере базы данных PostgreSQL"""
-    conn_params = {
-        "dbname": "studpg",
-        "user": "postgres",
-        "password": "changeme", 
-        "host": "postgresql",
-        "port": "5432"
-    }
-    
-    storage_info = {}
-    
-    try:
-        conn = psycopg2.connect(**conn_params)
-        with conn.cursor() as cur:
-            # Размер всей базы данных
-            cur.execute("SELECT pg_size_pretty(pg_database_size('studpg'))")
-            storage_info['database_size'] = cur.fetchone()[0]
-            
-            # Размеры отдельных таблиц
-            cur.execute("""
-                SELECT 
-                    table_name,
-                    pg_size_pretty(pg_total_relation_size(quote_ident(table_name))) as size,
-                    pg_size_pretty(pg_relation_size(quote_ident(table_name))) as table_size,
-                    pg_size_pretty(pg_total_relation_size(quote_ident(table_name)) - pg_relation_size(quote_ident(table_name))) as index_size
-                FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_type = 'BASE TABLE'
-                ORDER BY pg_total_relation_size(quote_ident(table_name)) DESC
-            """)
-            
-            tables_info = cur.fetchall()
-            storage_info['tables'] = []
-            
-            for table_name, total_size, table_size, index_size in tables_info:
-                storage_info['tables'].append({
-                    'name': table_name,
-                    'total_size': total_size,
-                    'table_size': table_size,
-                    'index_size': index_size
-                })
-            
-            # Общий размер таблиц и индексов
-            cur.execute("""
-                SELECT 
-                    pg_size_pretty(SUM(pg_total_relation_size(quote_ident(table_name)))) as total_tables_size,
-                    pg_size_pretty(SUM(pg_relation_size(quote_ident(table_name)))) as total_data_size,
-                    pg_size_pretty(SUM(pg_total_relation_size(quote_ident(table_name)) - pg_relation_size(quote_ident(table_name)))) as total_index_size
-                FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_type = 'BASE TABLE'
-            """)
-            
-            total_sizes = cur.fetchone()
-            storage_info['total_tables_size'] = total_sizes[0]
-            storage_info['total_data_size'] = total_sizes[1]
-            storage_info['total_index_size'] = total_sizes[2]
-            
-        conn.close()
-        print("✅ Информация о PostgreSQL получена успешно")
-        return storage_info
+            plt.annotate(f'MongoDB занимает на {abs(difference):.1f} MB ({abs(difference_percent):.1f}%) больше',
+                        xy=(0.5, 0.95), xycoords='axes fraction',
+                        ha='center', fontsize=11, style='italic',
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", alpha=0.7))
         
-    except Exception as e:
-        print(f"❌ Ошибка при получении информации о PostgreSQL: {e}")
-        return None
-
-def get_mongodb_storage_info():
-    """Получение информации о размере коллекций MongoDB"""
-    print("Проверка подключения к MongoDB...")
-    
-    # Сначала проверяем контейнер
-    if not check_mongo_container():
-        return None
-    
-    storage_info = {}
-    
-    client = get_mongo_client()
-    if not client:
-        print("❌ Не удалось подключиться к MongoDB")
-        return None
-    
-    try:
-        db = client['studmongo']
+        plt.tight_layout()
         
-        # Проверяем существование коллекции
-        collection_names = db.list_collection_names()
-        if 'shipments' not in collection_names:
-            print("❌ Коллекция 'shipments' не найдена в MongoDB")
-            client.close()
-            return None
+        # Сохранение графика
+        plt.savefig('data/storage_comparison.png', dpi=300, bbox_inches='tight')
+        plt.show()
         
-        # Статистика коллекции shipments
-        stats = db.command("collstats", "shipments")
+        # Вывод информации в консоль
+        print("📊 СРАВНЕНИЕ ЗАНИМАЕМОГО ПРОСТРАНСТВА")
+        print("=" * 50)
+        print(f"🗄️ PostgreSQL: {pg_size_mb} MB")
+        print(f"🍃 MongoDB: {mongo_size_mb} MB")
+        print(f"📈 Разница: {abs(difference):.1f} MB ({abs(difference_percent):.1f}%)")
         
-        storage_info['collection_size_mb'] = round(stats['size'] / (1024 * 1024), 2)
-        storage_info['storage_size_mb'] = round(stats['storageSize'] / (1024 * 1024), 2)
-        storage_info['total_index_size_mb'] = round(stats['totalIndexSize'] / (1024 * 1024), 2)
-        storage_info['avg_object_size'] = round(stats.get('avgObjSize', 0), 2)
-        storage_info['count'] = stats['count']
-        
-        # Размер всей базы данных
-        db_stats = db.command("dbStats")
-        storage_info['database_size_mb'] = round(db_stats['dataSize'] / (1024 * 1024), 2)
-        storage_info['total_database_size_mb'] = round(db_stats['storageSize'] / (1024 * 1024), 2)
-        
-        client.close()
-        print("✅ Информация о MongoDB получена успешно")
-        return storage_info
-        
-    except Exception as e:
-        print(f"❌ Ошибка при получении информации о MongoDB: {e}")
-        if client:
-            client.close()
-        return None
-
-def convert_size_to_mb(size_str):
-    """Конвертирует размер из формата '123 KB', '45 MB' в мегабайты"""
-    if not size_str:
-        return 0
-    
-    try:
-        size, unit = size_str.split()
-        size = float(size)
-        
-        if unit == 'GB':
-            return size * 1024
-        elif unit == 'MB':
-            return size
-        elif unit == 'KB':
-            return size / 1024
-        elif unit == 'bytes':
-            return size / (1024 * 1024)
+        if difference > 0:
+            print("✅ MongoDB эффективнее использует пространство")
         else:
-            return size
-    except:
-        return 0
-
-def visualize_postgres_only(pg_info):
-    """Визуализация только для PostgreSQL"""
-    plt.style.use('seaborn-v0_8')
-    sns.set_palette("husl")
-    
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
-    # График 1: Общий размер базы данных
-    ax1.set_title('POSTGRESQL: ОБЩИЙ РАЗМЕР БАЗЫ ДАННЫХ', fontsize=14, fontweight='bold')
-    
-    pg_total_mb = convert_size_to_mb(pg_info['database_size'])
-    
-    categories = ['PostgreSQL']
-    sizes = [pg_total_mb]
-    
-    bars = ax1.bar(categories, sizes, color='#1f77b4', alpha=0.7)
-    ax1.set_ylabel('Размер (MB)')
-    ax1.grid(True, alpha=0.3)
-    
-    for bar, size in zip(bars, sizes):
-        ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 5,
-                f'{size:.1f} MB', ha='center', va='bottom', fontweight='bold')
-    
-    # График 2: Детализация по таблицам
-    ax2.set_title('POSTGRESQL: РАСПРЕДЕЛЕНИЕ ПО ТАБЛИЦАМ', fontsize=12, fontweight='bold')
-    
-    table_names = [table['name'] for table in pg_info['tables']]
-    table_sizes = [convert_size_to_mb(table['total_size']) for table in pg_info['tables']]
-    
-    colors = plt.cm.Set3(np.linspace(0, 1, len(table_names)))
-    bars2 = ax2.bar(table_names, table_sizes, color=colors, alpha=0.7)
-    ax2.set_ylabel('Размер (MB)')
-    ax2.tick_params(axis='x', rotation=45)
-    ax2.grid(True, alpha=0.3)
-    
-    for bar, size in zip(bars2, table_sizes):
-        ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
-                f'{size:.1f} MB', ha='center', va='bottom', fontsize=9)
-    
-    plt.tight_layout()
-    plt.savefig('data/07_postgres_storage.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
-    return pg_total_mb
-
-def visualize_storage_comparison(pg_info, mongo_info):
-    """Визуализация сравнения занимаемого места"""
-    
-    if not pg_info:
-        print("❌ Нет данных PostgreSQL для визуализации")
-        return None
-    
-    if not mongo_info:
-        print("ℹ️  Нет данных MongoDB, визуализируем только PostgreSQL")
-        return visualize_postgres_only(pg_info)
-    
-    plt.style.use('seaborn-v0_8')
-    sns.set_palette("husl")
-    
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-    
-    # График 1: Общее сравнение размеров баз данных
-    ax1.set_title('СРАВНЕНИЕ РАЗМЕРОВ БАЗ ДАННЫХ', fontsize=14, fontweight='bold')
-    
-    pg_total_mb = convert_size_to_mb(pg_info['database_size'])
-    mongo_total_mb = mongo_info['total_database_size_mb']
-    
-    databases = ['PostgreSQL', 'MongoDB']
-    sizes = [pg_total_mb, mongo_total_mb]
-    
-    bars = ax1.bar(databases, sizes, color=['#1f77b4', '#ff7f0e'], alpha=0.7)
-    ax1.set_ylabel('Размер (MB)')
-    ax1.grid(True, alpha=0.3)
-    
-    for bar, size in zip(bars, sizes):
-        ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 5,
-                f'{size:.1f} MB', ha='center', va='bottom', fontweight='bold')
-    
-    # График 2: Детализация PostgreSQL
-    ax2.set_title('POSTGRESQL: РАСПРЕДЕЛЕНИЕ РАЗМЕРОВ ТАБЛИЦ', fontsize=12, fontweight='bold')
-    
-    table_names = [table['name'] for table in pg_info['tables']]
-    table_sizes = [convert_size_to_mb(table['total_size']) for table in pg_info['tables']]
-    
-    colors = plt.cm.Set3(np.linspace(0, 1, len(table_names)))
-    bars2 = ax2.bar(table_names, table_sizes, color=colors, alpha=0.7)
-    ax2.set_ylabel('Размер (MB)')
-    ax2.tick_params(axis='x', rotation=45)
-    ax2.grid(True, alpha=0.3)
-    
-    for bar, size in zip(bars2, table_sizes):
-        ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
-                f'{size:.1f} MB', ha='center', va='bottom', fontsize=9)
-    
-    # График 3: Детализация MongoDB
-    ax3.set_title('MONGODB: СТРУКТУРА ХРАНЕНИЯ', fontsize=12, fontweight='bold')
-    
-    mongo_categories = ['Данные', 'Индексы', 'Общий размер']
-    mongo_sizes = [
-        mongo_info['collection_size_mb'],
-        mongo_info['total_index_size_mb'],
-        mongo_info['storage_size_mb']
-    ]
-    
-    colors_mongo = ['#2ca02c', '#d62728', '#9467bd']
-    bars3 = ax3.bar(mongo_categories, mongo_sizes, color=colors_mongo, alpha=0.7)
-    ax3.set_ylabel('Размер (MB)')
-    ax3.grid(True, alpha=0.3)
-    
-    for bar, size in zip(bars3, mongo_sizes):
-        ax3.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
-                f'{size:.1f} MB', ha='center', va='bottom', fontweight='bold')
-    
-    # График 4: Сравнение эффективности хранения
-    ax4.set_title('СРАВНЕНИЕ ЭФФЕКТИВНОСТИ ХРАНЕНИЯ', fontsize=12, fontweight='bold')
-    
-    pg_data_mb = convert_size_to_mb(pg_info['total_data_size'])
-    pg_total_used_mb = convert_size_to_mb(pg_info['total_tables_size'])
-    pg_efficiency = (pg_data_mb / pg_total_used_mb) * 100 if pg_total_used_mb > 0 else 0
-    
-    mongo_data_mb = mongo_info['collection_size_mb']
-    mongo_total_used_mb = mongo_info['storage_size_mb']
-    mongo_efficiency = (mongo_data_mb / mongo_total_used_mb) * 100 if mongo_total_used_mb > 0 else 0
-    
-    efficiency_categories = ['PostgreSQL', 'MongoDB']
-    efficiency_values = [pg_efficiency, mongo_efficiency]
-    
-    bars4 = ax4.bar(efficiency_categories, efficiency_values, 
-                   color=['#1f77b4', '#ff7f0e'], alpha=0.7)
-    ax4.set_ylabel('Эффективность (%)')
-    ax4.set_ylim(0, 100)
-    ax4.grid(True, alpha=0.3)
-    
-    for bar, eff in zip(bars4, efficiency_values):
-        ax4.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
-                f'{eff:.1f}%', ha='center', va='bottom', fontweight='bold')
-    
-    plt.tight_layout()
-    plt.savefig('data/07_storage_comparison.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
-    return {
-        'postgresql_total_mb': pg_total_mb,
-        'mongodb_total_mb': mongo_total_mb,
-        'postgresql_efficiency': pg_efficiency,
-        'mongodb_efficiency': mongo_efficiency
-    }
-
-def print_storage_report(pg_info, mongo_info, comparison_results):
-    """Вывод детального отчета о занимаемом месте"""
-    
-    print("=" * 70)
-    print("АНАЛИЗ ЗАНИМАЕМОГО ДИСКОВОГО ПРОСТРАНСТВА")
-    print("=" * 70)
-    
-    print(f"\nPOSTGRESQL - ДЕТАЛЬНАЯ ИНФОРМАЦИЯ:")
-    print(f"Общий размер базы данных: {pg_info['database_size']}")
-    print(f"Общий размер таблиц: {pg_info['total_tables_size']}")
-    print(f"Размер данных: {pg_info['total_data_size']}")
-    print(f"Размер индексов: {pg_info['total_index_size']}")
-    
-    print(f"\nДетали по таблицам:")
-    for table in pg_info['tables']:
-        print(f"  {table['name']}: {table['total_size']} "
-              f"(данные: {table['table_size']}, индексы: {table['index_size']})")
-    
-    if mongo_info:
-        print(f"\nMONGODB - ДЕТАЛЬНАЯ ИНФОРМАЦИЯ:")
-        print(f"Общий размер базы данных: {mongo_info['total_database_size_mb']:.2f} MB")
-        print(f"Размер коллекции shipments: {mongo_info['collection_size_mb']:.2f} MB")
-        print(f"Размер хранилища: {mongo_info['storage_size_mb']:.2f} MB")
-        print(f"Размер индексов: {mongo_info['total_index_size_mb']:.2f} MB")
-        print(f"Средний размер документа: {mongo_info['avg_object_size']} bytes")
-        print(f"Количество документов: {mongo_info['count']:,}")
-    
-    print(f"\nСРАВНИТЕЛЬНЫЙ АНАЛИЗ:")
-    if comparison_results:
-        print(f"PostgreSQL общий размер: {comparison_results['postgresql_total_mb']:.2f} MB")
-        if mongo_info:
-            print(f"MongoDB общий размер: {comparison_results['mongodb_total_mb']:.2f} MB")
-            print(f"Разница: {abs(comparison_results['postgresql_total_mb'] - comparison_results['mongodb_total_mb']):.2f} MB")
+            print("✅ PostgreSQL эффективнее использует пространство")
             
-            efficiency_diff = comparison_results['postgresql_efficiency'] - comparison_results['mongodb_efficiency']
-            print(f"Эффективность хранения PostgreSQL: {comparison_results['postgresql_efficiency']:.1f}%")
-            print(f"Эффективность хранения MongoDB: {comparison_results['mongodb_efficiency']:.1f}%")
-            print(f"Разница в эффективности: {efficiency_diff:+.1f}%")
-    else:
-        print(f"PostgreSQL общий размер: {convert_size_to_mb(pg_info['database_size']):.2f} MB")
-        print("MongoDB: данные недоступны для сравнения")
-    
-    # Сохранение результатов
-    storage_report = {
-        'analysis_time': datetime.now().isoformat(),
-        'postgresql': pg_info,
-        'mongodb': mongo_info if mongo_info else 'unavailable',
-        'comparison': comparison_results if comparison_results else 'postgresql_only'
-    }
-    
-    with open('data/07_storage_analysis.json', 'w', encoding='utf-8') as f:
-        json.dump(storage_report, f, ensure_ascii=False, indent=2)
-    
-    print(f"\nРезультаты сохранены в data/07_storage_analysis.json")
-
-def main():
-    """Основная функция анализа хранилища"""
-    
-    print("АНАЛИЗ ЗАНИМАЕМОГО ДИСКОВОГО ПРОСТРАНСТВА")
-    print("=" * 50)
-    
-    print("\nСбор информации о PostgreSQL...")
-    pg_info = get_postgres_storage_info()
-    
-    if not pg_info:
-        print("❌ Не удалось получить информацию о PostgreSQL")
-        return
-    
-    print("\nСбор информации о MongoDB...")
-    mongo_info = get_mongodb_storage_info()
-    
-    print("\nВизуализация результатов...")
-    if mongo_info:
-        comparison_results = visualize_storage_comparison(pg_info, mongo_info)
-    else:
-        comparison_results = visualize_postgres_only(pg_info)
-    
-    print("\nГенерация отчета...")
-    print_storage_report(pg_info, mongo_info, comparison_results)
+        print(f"\n💾 График сохранен как: data/storage_comparison.png")
+        
+        return {
+            'postgresql_size_mb': pg_size_mb,
+            'mongodb_size_mb': mongo_size_mb,
+            'difference_mb': abs(difference),
+            'difference_percent': abs(difference_percent)
+        }
+        
+    except FileNotFoundError as e:
+        print(f"❌ Ошибка: Файл метаданных не найден: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Ошибка при создании графика: {e}")
+        return None
 
 if __name__ == "__main__":
-    main()
+    create_storage_comparison_chart()
