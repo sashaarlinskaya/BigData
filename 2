@@ -5,6 +5,38 @@ import numpy as np
 import seaborn as sns
 import json
 from datetime import datetime
+import subprocess
+import sys
+
+def get_mongo_client():
+    """Безопасное получение подключения к MongoDB"""
+    try:
+        client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=3000)
+        client.admin.command('ping')
+        return client
+    except:
+        try:
+            client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/', serverSelectionTimeoutMS=3000)
+            client.admin.command('ping')
+            return client
+        except:
+            return None
+
+def check_mongo_container():
+    """Проверка статуса MongoDB контейнера через Docker"""
+    try:
+        result = subprocess.run(['docker', 'ps', '--filter', 'name=mongodb', '--format', '{{.Names}}::{{.Status}}'], 
+                              capture_output=True, text=True)
+        if result.stdout.strip():
+            container_info = result.stdout.strip()
+            print(f"✅ MongoDB контейнер: {container_info}")
+            return True
+        else:
+            print("❌ MongoDB контейнер не запущен")
+            return False
+    except:
+        print("❌ Docker не доступен")
+        return False
 
 def get_postgres_storage_info():
     """Получение информации о размере базы данных PostgreSQL"""
@@ -66,19 +98,37 @@ def get_postgres_storage_info():
             storage_info['total_index_size'] = total_sizes[2]
             
         conn.close()
+        print("✅ Информация о PostgreSQL получена успешно")
         return storage_info
         
     except Exception as e:
-        print(f"Ошибка при получении информации о PostgreSQL: {e}")
+        print(f"❌ Ошибка при получении информации о PostgreSQL: {e}")
         return None
 
 def get_mongodb_storage_info():
     """Получение информации о размере коллекций MongoDB"""
+    print("Проверка подключения к MongoDB...")
+    
+    # Сначала проверяем контейнер
+    if not check_mongo_container():
+        return None
+    
     storage_info = {}
     
+    client = get_mongo_client()
+    if not client:
+        print("❌ Не удалось подключиться к MongoDB")
+        return None
+    
     try:
-        client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=3000)
         db = client['studmongo']
+        
+        # Проверяем существование коллекции
+        collection_names = db.list_collection_names()
+        if 'shipments' not in collection_names:
+            print("❌ Коллекция 'shipments' не найдена в MongoDB")
+            client.close()
+            return None
         
         # Статистика коллекции shipments
         stats = db.command("collstats", "shipments")
@@ -95,10 +145,13 @@ def get_mongodb_storage_info():
         storage_info['total_database_size_mb'] = round(db_stats['storageSize'] / (1024 * 1024), 2)
         
         client.close()
+        print("✅ Информация о MongoDB получена успешно")
         return storage_info
         
     except Exception as e:
-        print(f"Ошибка при получении информации о MongoDB: {e}")
+        print(f"❌ Ошибка при получении информации о MongoDB: {e}")
+        if client:
+            client.close()
         return None
 
 def convert_size_to_mb(size_str):
@@ -106,26 +159,78 @@ def convert_size_to_mb(size_str):
     if not size_str:
         return 0
     
-    size, unit = size_str.split()
-    size = float(size)
+    try:
+        size, unit = size_str.split()
+        size = float(size)
+        
+        if unit == 'GB':
+            return size * 1024
+        elif unit == 'MB':
+            return size
+        elif unit == 'KB':
+            return size / 1024
+        elif unit == 'bytes':
+            return size / (1024 * 1024)
+        else:
+            return size
+    except:
+        return 0
+
+def visualize_postgres_only(pg_info):
+    """Визуализация только для PostgreSQL"""
+    plt.style.use('seaborn-v0_8')
+    sns.set_palette("husl")
     
-    if unit == 'GB':
-        return size * 1024
-    elif unit == 'MB':
-        return size
-    elif unit == 'KB':
-        return size / 1024
-    elif unit == 'bytes':
-        return size / (1024 * 1024)
-    else:
-        return size
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # График 1: Общий размер базы данных
+    ax1.set_title('POSTGRESQL: ОБЩИЙ РАЗМЕР БАЗЫ ДАННЫХ', fontsize=14, fontweight='bold')
+    
+    pg_total_mb = convert_size_to_mb(pg_info['database_size'])
+    
+    categories = ['PostgreSQL']
+    sizes = [pg_total_mb]
+    
+    bars = ax1.bar(categories, sizes, color='#1f77b4', alpha=0.7)
+    ax1.set_ylabel('Размер (MB)')
+    ax1.grid(True, alpha=0.3)
+    
+    for bar, size in zip(bars, sizes):
+        ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 5,
+                f'{size:.1f} MB', ha='center', va='bottom', fontweight='bold')
+    
+    # График 2: Детализация по таблицам
+    ax2.set_title('POSTGRESQL: РАСПРЕДЕЛЕНИЕ ПО ТАБЛИЦАМ', fontsize=12, fontweight='bold')
+    
+    table_names = [table['name'] for table in pg_info['tables']]
+    table_sizes = [convert_size_to_mb(table['total_size']) for table in pg_info['tables']]
+    
+    colors = plt.cm.Set3(np.linspace(0, 1, len(table_names)))
+    bars2 = ax2.bar(table_names, table_sizes, color=colors, alpha=0.7)
+    ax2.set_ylabel('Размер (MB)')
+    ax2.tick_params(axis='x', rotation=45)
+    ax2.grid(True, alpha=0.3)
+    
+    for bar, size in zip(bars2, table_sizes):
+        ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
+                f'{size:.1f} MB', ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    plt.savefig('data/07_postgres_storage.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    return pg_total_mb
 
 def visualize_storage_comparison(pg_info, mongo_info):
     """Визуализация сравнения занимаемого места"""
     
-    if not pg_info or not mongo_info:
-        print("Недостаточно данных для визуализации")
-        return
+    if not pg_info:
+        print("❌ Нет данных PostgreSQL для визуализации")
+        return None
+    
+    if not mongo_info:
+        print("ℹ️  Нет данных MongoDB, визуализируем только PostgreSQL")
+        return visualize_postgres_only(pg_info)
     
     plt.style.use('seaborn-v0_8')
     sns.set_palette("husl")
@@ -135,7 +240,6 @@ def visualize_storage_comparison(pg_info, mongo_info):
     # График 1: Общее сравнение размеров баз данных
     ax1.set_title('СРАВНЕНИЕ РАЗМЕРОВ БАЗ ДАННЫХ', fontsize=14, fontweight='bold')
     
-    # Конвертируем размеры в MB для сравнения
     pg_total_mb = convert_size_to_mb(pg_info['database_size'])
     mongo_total_mb = mongo_info['total_database_size_mb']
     
@@ -146,7 +250,6 @@ def visualize_storage_comparison(pg_info, mongo_info):
     ax1.set_ylabel('Размер (MB)')
     ax1.grid(True, alpha=0.3)
     
-    # Добавляем значения на столбцы
     for bar, size in zip(bars, sizes):
         ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 5,
                 f'{size:.1f} MB', ha='center', va='bottom', fontweight='bold')
@@ -163,7 +266,6 @@ def visualize_storage_comparison(pg_info, mongo_info):
     ax2.tick_params(axis='x', rotation=45)
     ax2.grid(True, alpha=0.3)
     
-    # Добавляем значения на столбцы
     for bar, size in zip(bars2, table_sizes):
         ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
                 f'{size:.1f} MB', ha='center', va='bottom', fontsize=9)
@@ -183,7 +285,6 @@ def visualize_storage_comparison(pg_info, mongo_info):
     ax3.set_ylabel('Размер (MB)')
     ax3.grid(True, alpha=0.3)
     
-    # Добавляем значения на столбцы
     for bar, size in zip(bars3, mongo_sizes):
         ax3.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
                 f'{size:.1f} MB', ha='center', va='bottom', fontweight='bold')
@@ -191,7 +292,6 @@ def visualize_storage_comparison(pg_info, mongo_info):
     # График 4: Сравнение эффективности хранения
     ax4.set_title('СРАВНЕНИЕ ЭФФЕКТИВНОСТИ ХРАНЕНИЯ', fontsize=12, fontweight='bold')
     
-    # Рассчитываем эффективность (данные / общий размер)
     pg_data_mb = convert_size_to_mb(pg_info['total_data_size'])
     pg_total_used_mb = convert_size_to_mb(pg_info['total_tables_size'])
     pg_efficiency = (pg_data_mb / pg_total_used_mb) * 100 if pg_total_used_mb > 0 else 0
@@ -209,7 +309,6 @@ def visualize_storage_comparison(pg_info, mongo_info):
     ax4.set_ylim(0, 100)
     ax4.grid(True, alpha=0.3)
     
-    # Добавляем значения на столбцы
     for bar, eff in zip(bars4, efficiency_values):
         ax4.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
                 f'{eff:.1f}%', ha='center', va='bottom', fontweight='bold')
@@ -243,36 +342,36 @@ def print_storage_report(pg_info, mongo_info, comparison_results):
         print(f"  {table['name']}: {table['total_size']} "
               f"(данные: {table['table_size']}, индексы: {table['index_size']})")
     
-    print(f"\nMONGODB - ДЕТАЛЬНАЯ ИНФОРМАЦИЯ:")
-    print(f"Общий размер базы данных: {mongo_info['total_database_size_mb']:.2f} MB")
-    print(f"Размер коллекции shipments: {mongo_info['collection_size_mb']:.2f} MB")
-    print(f"Размер хранилища: {mongo_info['storage_size_mb']:.2f} MB")
-    print(f"Размер индексов: {mongo_info['total_index_size_mb']:.2f} MB")
-    print(f"Средний размер документа: {mongo_info['avg_object_size']} bytes")
-    print(f"Количество документов: {mongo_info['count']:,}")
+    if mongo_info:
+        print(f"\nMONGODB - ДЕТАЛЬНАЯ ИНФОРМАЦИЯ:")
+        print(f"Общий размер базы данных: {mongo_info['total_database_size_mb']:.2f} MB")
+        print(f"Размер коллекции shipments: {mongo_info['collection_size_mb']:.2f} MB")
+        print(f"Размер хранилища: {mongo_info['storage_size_mb']:.2f} MB")
+        print(f"Размер индексов: {mongo_info['total_index_size_mb']:.2f} MB")
+        print(f"Средний размер документа: {mongo_info['avg_object_size']} bytes")
+        print(f"Количество документов: {mongo_info['count']:,}")
     
     print(f"\nСРАВНИТЕЛЬНЫЙ АНАЛИЗ:")
-    print(f"PostgreSQL общий размер: {comparison_results['postgresql_total_mb']:.2f} MB")
-    print(f"MongoDB общий размер: {comparison_results['mongodb_total_mb']:.2f} MB")
-    print(f"Разница: {abs(comparison_results['postgresql_total_mb'] - comparison_results['mongodb_total_mb']):.2f} MB")
-    
-    efficiency_diff = comparison_results['postgresql_efficiency'] - comparison_results['mongodb_efficiency']
-    print(f"Эффективность хранения PostgreSQL: {comparison_results['postgresql_efficiency']:.1f}%")
-    print(f"Эффективность хранения MongoDB: {comparison_results['mongodb_efficiency']:.1f}%")
-    print(f"Разница в эффективности: {efficiency_diff:+.1f}%")
+    if comparison_results:
+        print(f"PostgreSQL общий размер: {comparison_results['postgresql_total_mb']:.2f} MB")
+        if mongo_info:
+            print(f"MongoDB общий размер: {comparison_results['mongodb_total_mb']:.2f} MB")
+            print(f"Разница: {abs(comparison_results['postgresql_total_mb'] - comparison_results['mongodb_total_mb']):.2f} MB")
+            
+            efficiency_diff = comparison_results['postgresql_efficiency'] - comparison_results['mongodb_efficiency']
+            print(f"Эффективность хранения PostgreSQL: {comparison_results['postgresql_efficiency']:.1f}%")
+            print(f"Эффективность хранения MongoDB: {comparison_results['mongodb_efficiency']:.1f}%")
+            print(f"Разница в эффективности: {efficiency_diff:+.1f}%")
+    else:
+        print(f"PostgreSQL общий размер: {convert_size_to_mb(pg_info['database_size']):.2f} MB")
+        print("MongoDB: данные недоступны для сравнения")
     
     # Сохранение результатов
     storage_report = {
         'analysis_time': datetime.now().isoformat(),
         'postgresql': pg_info,
-        'mongodb': mongo_info,
-        'comparison': comparison_results,
-        'summary': {
-            'postgresql_total_mb': comparison_results['postgresql_total_mb'],
-            'mongodb_total_mb': comparison_results['mongodb_total_mb'],
-            'size_difference_mb': abs(comparison_results['postgresql_total_mb'] - comparison_results['mongodb_total_mb']),
-            'efficiency_difference_percent': efficiency_diff
-        }
+        'mongodb': mongo_info if mongo_info else 'unavailable',
+        'comparison': comparison_results if comparison_results else 'postgresql_only'
     }
     
     with open('data/07_storage_analysis.json', 'w', encoding='utf-8') as f:
@@ -289,17 +388,21 @@ def main():
     print("\nСбор информации о PostgreSQL...")
     pg_info = get_postgres_storage_info()
     
-    print("Сбор информации о MongoDB...")
+    if not pg_info:
+        print("❌ Не удалось получить информацию о PostgreSQL")
+        return
+    
+    print("\nСбор информации о MongoDB...")
     mongo_info = get_mongodb_storage_info()
     
-    if pg_info and mongo_info:
-        print("Визуализация результатов...")
+    print("\nВизуализация результатов...")
+    if mongo_info:
         comparison_results = visualize_storage_comparison(pg_info, mongo_info)
-        
-        print("\nГенерация отчета...")
-        print_storage_report(pg_info, mongo_info, comparison_results)
     else:
-        print("Не удалось собрать информацию о хранилищах")
+        comparison_results = visualize_postgres_only(pg_info)
+    
+    print("\nГенерация отчета...")
+    print_storage_report(pg_info, mongo_info, comparison_results)
 
 if __name__ == "__main__":
     main()
