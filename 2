@@ -7,20 +7,37 @@ import json
 from datetime import datetime
 import subprocess
 import sys
+import time
 
 def get_mongo_client():
-    """Безопасное получение подключения к MongoDB"""
-    try:
-        client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=3000)
-        client.admin.command('ping')
-        return client
-    except:
+    """Безопасное получение подключения к MongoDB с повторными попытками"""
+    max_attempts = 5
+    wait_time = 2
+    
+    for attempt in range(1, max_attempts + 1):
         try:
-            client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/', serverSelectionTimeoutMS=3000)
+            print(f"Попытка подключения к MongoDB {attempt}/{max_attempts}...")
+            
+            # Первая попытка - стандартное подключение
+            client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=3000)
             client.admin.command('ping')
+            print("✅ Успешное подключение к MongoDB")
             return client
         except:
-            return None
+            try:
+                # Вторая попытка - с аутентификацией
+                client = MongoClient('mongodb://mongouser:mongopass@localhost:27017/', serverSelectionTimeoutMS=3000)
+                client.admin.command('ping')
+                print("✅ Успешное подключение к MongoDB (с аутентификацией)")
+                return client
+            except:
+                if attempt < max_attempts:
+                    print(f"❌ Неудачная попытка подключения {attempt}, повтор через {wait_time} сек...")
+                    time.sleep(wait_time)
+                    wait_time *= 2  # Экспоненциальная задержка
+                else:
+                    print("❌ Не удалось подключиться к MongoDB после всех попыток")
+                    return None
 
 def check_mongo_container():
     """Проверка статуса MongoDB контейнера через Docker"""
