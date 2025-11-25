@@ -103,20 +103,18 @@ def main():
     print("\nТоп-10 товаров по количеству продаж:")
     result.show(10, truncate=False)
     
-    # Найти самый продаваемый товар
-    top_row = result.first()
-    if top_row:
-        print(f"\nСамый продаваемый товар: '{top_row['Description']}'")
-        print(f"Код товара: {top_row['StockCode']}")
-        print(f"Общее количество продаж: {int(top_row['TotalQuantity'])}")
-        print(f"Количество транзакций: {int(top_row['TransactionCount'])}")
-    else:
-        print("Нет данных для анализа")
+    # Сохранить результаты в HDFS
+    output_path = "hdfs://hadoop:9000/user/hadoop/output/top_products"
     
-    # Сохранить результаты
-    output_path = "file:///tmp/top_products_spark"
-    result.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
-    print(f"\nРезультаты сохранены в: {output_path}")
+    try:
+        result.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
+        print(f"\nРезультаты сохранены в HDFS: {output_path}")
+    except Exception as e:
+        print(f"Ошибка при сохранении в HDFS: {e}")
+        # Резервное сохранение локально
+        local_output = "file:///tmp/top_products_spark"
+        result.coalesce(1).write.mode("overwrite").option("header", "true").csv(local_output)
+        print(f"Результаты сохранены локально: {local_output}")
     
     spark.stop()
 
