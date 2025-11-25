@@ -1,298 +1,213 @@
-#!/usr/bin/env python3
-"""
-Анализ данных продаж с использованием Hive
-Задача: найти топ-10 товаров по количеству продаж
-"""
+# 1. Загрузка необходимых библиотек
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
 import subprocess
 import os
-import sys
-import tempfile
 
-class SalesAnalysis:
-    def __init__(self):
-        self.local_file = '/opt/data/myfile.csv'
-        self.hdfs_output_dir = '/user/hadoop/output/'
-        self.hdfs_file_path = f'{self.hdfs_output_dir}myfile.csv'
-        
-    def upload_data_to_hdfs(self):
-        """Загрузить данные в HDFS"""
-        print("Загрузка данных в HDFS")
-        
-        if not os.path.exists(self.local_file):
-            print(f"Файл {self.local_file} не найден")
-            return False
-        
-        print(f"Локальный файл найден: {self.local_file}")
-        
-        try:
-            # Загружаем файл в существующую директорию
-            subprocess.run(['hdfs', 'dfs', '-put', '-f', self.local_file, self.hdfs_file_path], check=True)
-            print(f"Файл загружен в HDFS: {self.hdfs_file_path}")
-            
-            # Проверяем размер файла
-            size_result = subprocess.run(
-                ['hdfs', 'dfs', '-du', '-h', self.hdfs_file_path],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            print(f"Размер файла в HDFS: {size_result.stdout.strip()}")
-            
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            print(f"Ошибка при работе с HDFS: {e}")
-            return False
+# Настройка отображения
+plt.style.use('seaborn-v0_8')
+sns.set_palette("husl")
+%matplotlib inline
 
-    def run_hive_analysis(self):
-        """Выполнить анализ через Hive"""
-        print("\nЗапуск анализа через Hive")
-        
-        # Создаем HQL запрос для поиска топ-10 товаров
-        hql_content = """
--- Создание внешней таблицы на основе CSV файла
-CREATE EXTERNAL TABLE IF NOT EXISTS sales_data (
-    InvoiceNo STRING,
-    StockCode STRING,
-    Description STRING,
-    Quantity INT,
-    InvoiceDate STRING,
-    UnitPrice DOUBLE,
-    CustomerID STRING,
-    Country STRING
-)
-ROW FORMAT DELIMITED
-FIELDS TERMINATED BY ','
-STORED AS TEXTFILE
-LOCATION '/user/hadoop/output/'
-TBLPROPERTIES ("skip.header.line.count"="1");
+# Увеличение размера графиков
+plt.rcParams['figure.figsize'] = (12, 8)
 
--- Поиск топ-10 товаров по количеству продаж
-SELECT 
-    StockCode,
-    Description,
-    SUM(Quantity) AS TotalQuantity,
-    COUNT(*) AS TransactionCount,
-    ROUND(AVG(UnitPrice), 2) AS AvgUnitPrice,
-    ROUND(SUM(Quantity * UnitPrice), 2) AS TotalRevenue
-FROM sales_data
-WHERE 
-    NOT STARTSWITH(InvoiceNo, 'C')  -- Исключаем отмененные заказы
-    AND Quantity > 0                 -- Исключаем возвраты
-    AND Description IS NOT NULL      -- Исключаем товары без описания
-GROUP BY StockCode, Description
-ORDER BY TotalQuantity DESC
-LIMIT 10;
-"""
-        
-        try:
-            # Создаем временный файл с HQL запросом
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.hql', delete=False) as f:
-                f.write(hql_content)
-                temp_file = f.name
-            
-            print("Создан HQL файл для анализа")
-            
-            # Запускаем Hive с нашим запросом
-            print("Выполнение Hive запроса...")
-            result = subprocess.run(
-                ['hive', '-f', temp_file],
-                capture_output=True,
-                text=True
-            )
-            
-            # Удаляем временный файл
-            os.unlink(temp_file)
-            
-            if result.returncode == 0:
-                print("Hive анализ выполнен успешно")
-                
-                # Выводим результаты
-                print("\n" + "="*80)
-                print("ТОП-10 ТОВАРОВ ПО КОЛИЧЕСТВУ ПРОДАЖ")
-                print("="*80)
-                
-                # Парсим вывод Hive чтобы показать красивые результаты
-                lines = result.stdout.split('\n')
-                header_printed = False
-                
-                for line in lines:
-                    line = line.strip()
-                    # Пропускаем служебные строки
-                    if not line or line.startswith('OK') or line.startswith('Time taken') or line.startswith('Logging'):
-                        continue
-                    
-                    # Находим заголовок с названиями колонок
-                    if 'StockCode' in line and 'Description' in line and 'TotalQuantity' in line:
-                        print("\nКодТовара | Описание | ВсегоПродано | Транзакций | СрЦена | Выручка")
-                        print("-" * 90)
-                        header_printed = True
-                        continue
-                    
-                    # Выводим строки с данными (предполагаем формат вывода Hive)
-                    if header_printed and line and not line.startswith('-'):
-                        # Простой вывод строки как есть
-                        print(line)
-                
-                return True
-            else:
-                print(f"Ошибка выполнения Hive: {result.stderr}")
-                return False
-                
-        except Exception as e:
-            print(f"Ошибка при выполнении Hive анализа: {e}")
-            return False
+# 2. Загрузка данных
+print("Загрузка данных о продажах...")
+data_file = '/opt/data/myfile.csv'
 
-    def save_hive_results(self):
-        """Сохранить результаты Hive анализа в HDFS"""
-        print("\nСохранение результатов в HDFS")
-        
-        hql_save_content = """
--- Создание таблицы для результатов
-CREATE TABLE IF NOT EXISTS top_10_products (
-    StockCode STRING,
-    Description STRING,
-    TotalQuantity INT,
-    TransactionCount INT,
-    AvgUnitPrice DOUBLE,
-    TotalRevenue DOUBLE
-)
-STORED AS ORC;
+# Проверяем наличие файла
+if os.path.exists(data_file):
+    df = pd.read_csv(data_file, low_memory=False)
+    print(f"Данные успешно загружены из {data_file}")
+    print(f"Размер датасета: {df.shape}")
+else:
+    print(f"ОШИБКА: Файл {data_file} не найден!")
+    df = pd.DataFrame()
 
--- Вставка результатов
-INSERT OVERWRITE TABLE top_10_products
-SELECT 
-    StockCode,
-    Description,
-    SUM(Quantity) AS TotalQuantity,
-    COUNT(*) AS TransactionCount,
-    ROUND(AVG(UnitPrice), 2) AS AvgUnitPrice,
-    ROUND(SUM(Quantity * UnitPrice), 2) AS TotalRevenue
-FROM sales_data
-WHERE 
-    NOT STARTSWITH(InvoiceNo, 'C')
-    AND Quantity > 0
-    AND Description IS NOT NULL
-GROUP BY StockCode, Description
-ORDER BY TotalQuantity DESC
-LIMIT 10;
+# 3. Предварительный анализ данных
+if not df.empty:
+    print("\nИнформация о данных:")
+    print(df.info())
+    print("\nПервые 5 строк:")
+    print(df.head())
+    print("\nОсновная статистика:")
+    print(df.describe())
 
--- Экспорт в HDFS
-INSERT OVERWRITE DIRECTORY '/user/hadoop/output/top_products'
-ROW FORMAT DELIMITED
-FIELDS TERMINATED BY ','
-STORED AS TEXTFILE
-SELECT * FROM top_10_products;
-"""
-        
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.hql', delete=False) as f:
-                f.write(hql_save_content)
-                temp_file = f.name
-            
-            print("Сохранение результатов...")
-            result = subprocess.run(
-                ['hive', '-f', temp_file],
-                capture_output=True,
-                text=True
-            )
-            
-            os.unlink(temp_file)
-            
-            if result.returncode == 0:
-                print("Результаты сохранены в HDFS: /user/hadoop/output/top_products")
-                return True
-            else:
-                print(f"Ошибка сохранения результатов: {result.stderr}")
-                return False
-                
-        except Exception as e:
-            print(f"Ошибка при сохранении результатов: {e}")
-            return False
+# 4. Очистка и подготовка данных
+df_clean = df.copy()
 
-    def check_results(self):
-        """Проверить результаты в HDFS"""
-        print("\nПроверка результатов в HDFS")
-        
-        try:
-            # Проверяем существование результатов
-            result = subprocess.run(
-                ['hdfs', 'dfs', '-ls', '/user/hadoop/output/top_products/'],
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode == 0:
-                print("Результаты найдены в HDFS:")
-                for line in result.stdout.split('\n'):
-                    if 'part-' in line:
-                        file_info = line.split()
-                        if len(file_info) >= 5:
-                            print(f"  Файл: {file_info[-1]}, Размер: {file_info[4]} байт")
-                
-                # Показываем содержимое результатов
-                print("\nСодержимое результатов:")
-                cat_result = subprocess.run(
-                    ['hdfs', 'dfs', '-cat', '/user/hadoop/output/top_products/000000_0'],
-                    capture_output=True,
-                    text=True
-                )
-                
-                if cat_result.returncode == 0:
-                    lines = cat_result.stdout.strip().split('\n')
-                    print("КодТовара,Описание,ВсегоПродано,Транзакций,СрЦена,Выручка")
-                    for line in lines:
-                        print(line)
-                else:
-                    print("Не удалось прочитать содержимое файла")
-                    
-                return True
-            else:
-                print("Результаты не найдены в HDFS")
-                return False
-                
-        except Exception as e:
-            print(f"Ошибка при проверке результатов: {e}")
-            return False
-
-    def run_complete_analysis(self):
-        """Запустить полный анализ"""
-        print("=" * 60)
-        print("АНАЛИЗ ПРОДАЖ: ТОП-10 ТОВАРОВ ПО КОЛИЧЕСТВУ ПРОДАЖ")
-        print("=" * 60)
-        
-        # 1. Загружаем данные в HDFS
-        if not self.upload_data_to_hdfs():
-            return False
-        
-        # 2. Выполняем Hive анализ
-        if not self.run_hive_analysis():
-            return False
-        
-        # 3. Сохраняем результаты в HDFS
-        if not self.save_hive_results():
-            return False
-        
-        # 4. Проверяем результаты
-        if not self.check_results():
-            return False
-        
-        print("\nАнализ завершен успешно!")
-        print("Топ-10 товаров по количеству продаж найден и сохранен в HDFS")
-        
-        return True
-
-def main():
-    analyzer = SalesAnalysis()
+if not df_clean.empty:
+    # Удаляем отмененные заказы (InvoiceNo начинается с 'c')
+    df_clean = df_clean[~df_clean['InvoiceNo'].astype(str).str.startswith('C', na=False)]
     
-    success = analyzer.run_complete_analysis()
+    # Удаляем возвраты (отрицательное количество)
+    df_clean = df_clean[df_clean['Quantity'] > 0]
     
-    if success:
-        print("\nЗадача выполнена успешно!")
-        sys.exit(0)
-    else:
-        print("\nЗадача завершена с ошибками")
-        sys.exit(1)
+    # Удаляем строки с пропущенными Description (названиями товаров)
+    df_clean = df_clean.dropna(subset=['Description'])
+    
+    # Преобразуем Quantity в числовой формат и удаляем аномалии
+    df_clean['Quantity'] = pd.to_numeric(df_clean['Quantity'], errors='coerce')
+    df_clean = df_clean.dropna(subset=['Quantity'])
+    
+    # Удаляем возможные выбросы (очень большие количества)
+    Q1 = df_clean['Quantity'].quantile(0.25)
+    Q3 = df_clean['Quantity'].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    df_clean = df_clean[(df_clean['Quantity'] >= lower_bound) & (df_clean['Quantity'] <= upper_bound)]
+    
+    print(f"\nКоличество строк после очистки: {len(df_clean)}")
+    print(f"Количество уникальных товаров: {df_clean['Description'].nunique()}")
 
-if __name__ == '__main__':
-    main()
+# 5. Анализ топ-10 товаров по количеству продаж
+if not df_clean.empty:
+    # Группируем по названию товара и суммируем количество продаж
+    top_products = df_clean.groupby('Description')['Quantity'].agg(['sum', 'count']).reset_index()
+    top_products.columns = ['Product', 'Total_Quantity', 'Transaction_Count']
+    top_products = top_products.sort_values('Total_Quantity', ascending=False)
+    
+    # Берем топ-10 товаров
+    top_10_products = top_products.head(10)
+    
+    print("\nТоп-10 товаров по количеству продаж:")
+    print(top_10_products.to_string(index=False))
+
+# 6. Визуализация результатов
+if not top_10_products.empty:
+    # Создаем фигуру с двумя субплогами
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+    
+    # График 1: Топ-10 товаров по общему количеству
+    products = top_10_products['Product']
+    quantities = top_10_products['Total_Quantity']
+    
+    bars = ax1.barh(range(len(products)), quantities)
+    ax1.set_yticks(range(len(products)))
+    ax1.set_yticklabels(products, fontsize=10)
+    ax1.set_xlabel('Общее количество продаж')
+    ax1.set_title('Топ-10 товаров по количеству продаж')
+    ax1.invert_yaxis()  # Чтобы товар с наибольшими продажами был сверху
+    
+    # Добавляем значения на столбцы
+    for i, bar in enumerate(bars):
+        width = bar.get_width()
+        ax1.text(width + width*0.01, bar.get_y() + bar.get_height()/2, 
+                f'{int(width):,}', ha='left', va='center', fontsize=9)
+    
+    # График 2: Топ-10 товаров по количеству транзакций
+    top_by_transactions = top_products.sort_values('Transaction_Count', ascending=False).head(10)
+    ax2.barh(range(len(top_by_transactions)), top_by_transactions['Transaction_Count'])
+    ax2.set_yticks(range(len(top_by_transactions)))
+    ax2.set_yticklabels(top_by_transactions['Product'], fontsize=10)
+    ax2.set_xlabel('Количество транзакций')
+    ax2.set_title('Топ-10 товаров по количеству транзакций')
+    ax2.invert_yaxis()
+    
+    plt.tight_layout()
+    plt.show()
+
+# 7. Детальный анализ топ-10 товаров
+if not top_10_products.empty:
+    print("\n" + "="*80)
+    print("ДЕТАЛЬНЫЙ АНАЛИЗ ТОП-10 ТОВАРОВ")
+    print("="*80)
+    
+    for i, row in top_10_products.iterrows():
+        product_data = df_clean[df_clean['Description'] == row['Product']]
+        
+        print(f"\n{i+1}. {row['Product']}")
+        print(f"   Общее количество продаж: {row['Total_Quantity']:,}")
+        print(f"   Количество транзакций: {row['Transaction_Count']}")
+        print(f"   Среднее количество за транзакцию: {row['Total_Quantity']/row['Transaction_Count']:.1f}")
+        
+        if 'UnitPrice' in product_data.columns:
+            avg_price = product_data['UnitPrice'].mean()
+            print(f"   Средняя цена: £{avg_price:.2f}")
+            total_revenue = (product_data['Quantity'] * product_data['UnitPrice']).sum()
+            print(f"   Общая выручка: £{total_revenue:,.2f}")
+
+# 8. Дополнительная статистика
+if not df_clean.empty:
+    print(f"\n" + "="*50)
+    print("ОБЩАЯ СТАТИСТИКА ПО ПРОДАЖАМ")
+    print("="*50)
+    print(f"Всего уникальных товаров: {df_clean['Description'].nunique():,}")
+    print(f"Общее количество проданных единиц: {df_clean['Quantity'].sum():,}")
+    print(f"Общее количество транзакций: {df_clean['InvoiceNo'].nunique():,}")
+    print(f"Среднее количество товаров в транзакции: {df_clean.groupby('InvoiceNo')['Quantity'].sum().mean():.1f}")
+    
+    if 'UnitPrice' in df_clean.columns:
+        total_revenue = (df_clean['Quantity'] * df_clean['UnitPrice']).sum()
+        print(f"Общая выручка: £{total_revenue:,.2f}")
+
+# 9. Анализ по странам для топ-товаров
+if not top_10_products.empty and 'Country' in df_clean.columns:
+    print(f"\n" + "="*50)
+    print("РАСПРЕДЕЛЕНИЕ ТОП-ТОВАРОВ ПО СТРАНАМ")
+    print("="*50)
+    
+    top_product_names = top_10_products['Product'].tolist()
+    
+    for product in top_product_names[:3]:  # Покажем для первых 3 товаров
+        product_country_data = df_clean[df_clean['Description'] == product].groupby('Country')['Quantity'].sum()
+        top_countries = product_country_data.sort_values(ascending=False).head(5)
+        
+        print(f"\n{product}:")
+        for country, quantity in top_countries.items():
+            print(f"   {country}: {quantity:,} ед.")
+
+# 10. Временной анализ (если есть данные о датах)
+if not df_clean.empty and 'InvoiceDate' in df_clean.columns:
+    try:
+        # Преобразуем дату в datetime формат
+        df_clean['InvoiceDate'] = pd.to_datetime(df_clean['InvoiceDate'])
+        
+        # Анализ продаж по месяцам
+        df_clean['month'] = df_clean['InvoiceDate'].dt.to_period('M')
+        monthly_sales = df_clean.groupby('month')['Quantity'].sum().reset_index()
+        monthly_sales['month'] = monthly_sales['month'].astype(str)
+        
+        plt.figure(figsize=(12, 6))
+        plt.plot(monthly_sales['month'], monthly_sales['Quantity'], marker='o', linewidth=2, markersize=6)
+        plt.xlabel('Месяц')
+        plt.ylabel('Количество продаж')
+        plt.title('Динамика продаж по месяцам')
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+        
+        print(f"\nДинамика продаж по месяцам:")
+        print(monthly_sales.to_string(index=False))
+        
+    except Exception as e:
+        print(f"Не удалось проанализировать временные тенденции: {e}")
+
+# 11. Сохранение результатов
+if not top_10_products.empty:
+    # Сохраняем результаты в локальный файл
+    results_path = "/opt/data/top_10_products_analysis.csv"
+    top_10_products.to_csv(results_path, index=False)
+    print(f"\nРезультаты сохранены в: {results_path}")
+    
+    # Пытаемся сохранить в HDFS
+    try:
+        hdfs_results_path = "/user/hadoop/results/top_10_products.csv"
+        hdfs_upload_cmd = f"hdfs dfs -put -f {results_path} {hdfs_results_path}"
+        result = subprocess.run(hdfs_upload_cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print(f"Результаты также сохранены в HDFS: {hdfs_results_path}")
+        else:
+            print(f"Не удалось сохранить в HDFS: {result.stderr}")
+            
+    except Exception as e:
+        print(f"Ошибка при сохранении в HDFS: {e}")
+
+print("\nАнализ завершен!")
