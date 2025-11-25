@@ -103,18 +103,11 @@ def main():
     print("\nТоп-10 товаров по количеству продаж:")
     result.show(10, truncate=False)
     
-    # Сохранить результаты в HDFS
+    # Сохранить результаты ТОЛЬКО в HDFS
     output_path = "hdfs://hadoop:9000/user/hadoop/output/top_products"
     
-    try:
-        result.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
-        print(f"\nРезультаты сохранены в HDFS: {output_path}")
-    except Exception as e:
-        print(f"Ошибка при сохранении в HDFS: {e}")
-        # Резервное сохранение локально
-        local_output = "file:///tmp/top_products_spark"
-        result.coalesce(1).write.mode("overwrite").option("header", "true").csv(local_output)
-        print(f"Результаты сохранены локально: {local_output}")
+    result.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
+    print(f"\nРезультаты сохранены в HDFS: {output_path}")
     
     spark.stop()
 
