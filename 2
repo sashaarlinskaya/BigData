@@ -1,111 +1,18 @@
-#!/usr/bin/env python3
-"""
-Анализ данных продаж с использованием PySpark
-Задача: найти топ-10 товаров по количеству продаж
-"""
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum, count, desc
-import sys
-import os
+def upload_to_hdfs(local_path, hdfs_path):
+    """Загрузить файл в HDFS"""
+    import subprocess
+    try:
+        subprocess.run(['hdfs', 'dfs', '-put', '-f', local_path, hdfs_path], check=True)
+        print(f"Файл загружен в HDFS: {hdfs_path}")
+        return True
+    except Exception as e:
+        print(f"Ошибка загрузки в HDFS: {e}")
+        return False
 
-def create_spark_session():
-    """Создать Spark сессию"""
-    spark = SparkSession.builder \
-        .appName("Sales Analysis") \
-        .master("local[*]") \
-        .config("spark.driver.memory", "2g") \
-        .config("spark.executor.memory", "2g") \
-        .getOrCreate()
-    return spark
-
-def load_data(spark, filepath):
-    """Загрузить данные из файла"""
-    print(f"Загрузка данных из: {filepath}")
-    
-    df = spark.read.csv(filepath, header=True, inferSchema=True)
-    print(f"Количество строк: {df.count()}")
-    return df
-
-def clean_and_prepare(df):
-    """Очистка и подготовка данных"""
-    print("\n=== Очистка данных ===")
-    print(f"Исходное количество строк: {df.count()}")
-    
-    # Удалить отмененные заказы (InvoiceNo начинается с 'C')
-    df = df.filter(~col('InvoiceNo').startswith('C'))
-    
-    # Удалить строки с отрицательным количеством
-    df = df.filter(col('Quantity') > 0)
-    
-    # Удалить строки без описания товара
-    df = df.filter(col('Description').isNotNull())
-    
-    print(f"Количество строк после очистки: {df.count()}")
-    print(f"Уникальных товаров: {df.select('StockCode').distinct().count()}")
-    
-    return df
-
-def analyze_sales_by_product(df):
-    """Анализ количества продаж по товарам"""
-    print("\n=== Анализ продаж по товарам ===")
-    
-    # Группировка и агрегация
-    result = df.groupBy('StockCode', 'Description') \
-        .agg(
-            sum('Quantity').alias('TotalQuantity'),
-            count('*').alias('TransactionCount')
-        ) \
-        .orderBy(col('TotalQuantity').desc())
-    
-    return result
-
-def main():
-    # Путь к данным
-    data_file = '/opt/data/myfile.csv'
-    
-    # Создать Spark сессию
-    spark = create_spark_session()
-    
-    print("=== Анализ данных продаж с использованием PySpark ===")
-    
-    # Показать конфигурацию
-    print("\n=== Конфигурация Spark ===")
-    print(f"Version: {spark.version}")
-    print(f"Master: {spark.sparkContext.master}")
-    
-    # Загрузить данные
+# В main перед загрузкой данных:
+hdfs_path = "hdfs://hadoop:9000/user/hadoop/myfile.csv"
+if upload_to_hdfs(data_file, hdfs_path):
+    df = spark.read.csv(hdfs_path, header=True, inferSchema=True)
+else:
+    # Использовать локальный файл как запасной вариант
     df = load_data(spark, data_file)
-    
-    # Показать схему и первые строки
-    print("\n=== Схема данных ===")
-    df.printSchema()
-    print("\nПервые 5 строк:")
-    df.show(5)
-    
-    # Очистка данных
-    df_clean = clean_and_prepare(df)
-    
-    # Анализ
-    result = analyze_sales_by_product(df_clean)
-    
-    # Показать результаты
-    print("\n=== Результаты ===")
-    print("\nТоп-10 товаров по количеству продаж:")
-    result.show(10, truncate=False)
-    
-    # Найти самый продаваемый товар
-    top_row = result.first()
-    print(f"\nСамый продаваемый товар: '{top_row['Description']}'")
-    print(f"Код товара: {top_row['StockCode']}")
-    print(f"Общее количество продаж: {int(top_row['TotalQuantity'])}")
-    print(f"Количество транзакций: {int(top_row['TransactionCount'])}")
-    
-    # Сохранить результаты
-    output_path = "results/top_products_spark"
-    result.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
-    print(f"\nРезультаты сохранены в: {output_path}")
-    
-    spark.stop()
-
-if __name__ == '__main__':
-    main()
