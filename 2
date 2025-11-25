@@ -1,115 +1,344 @@
 #!/usr/bin/env python3
 """
-Анализ данных продаж с использованием PySpark
+Анализ данных продаж с использованием Hive
 Задача: найти топ-10 товаров по количеству продаж
 """
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum, count, desc
-import sys
+import subprocess
 import os
+import sys
+import time
+import tempfile
 
-def create_spark_session():
-    """Создать Spark сессию"""
-    spark = SparkSession.builder \
-        .appName("Sales Analysis") \
-        .master("local[*]") \
-        .config("spark.driver.memory", "2g") \
-        .config("spark.executor.memory", "2g") \
-        .getOrCreate()
-    return spark
+class HiveSalesAnalysis:
+    def __init__(self):
+        self.local_file = '/opt/data/myfile.csv'
+        self.hdfs_output_dir = '/user/hadoop/output/'
+        self.hdfs_file_path = f'{self.hdfs_output_dir}myfile.csv'
+        
+    def check_hadoop_services(self):
+        """Проверить запущены ли необходимые сервисы Hadoop"""
+        print("\nПроверка сервисов Hadoop")
+        
+        try:
+            result = subprocess.run(['jps'], capture_output=True, text=True, check=True)
+            services = result.stdout
+            
+            service_status = {
+                'NameNode': 'NameNode запущен' if 'NameNode' in services else 'NameNode не запущен',
+                'DataNode': 'DataNode запущен' if 'DataNode' in services else 'DataNode не запущен',
+                'ResourceManager': 'ResourceManager запущен' if 'ResourceManager' in services else 'ResourceManager не запущен',
+                'HiveServer2': 'HiveServer2 запущен' if 'RunJar' in services or 'HiveServer2' in services else 'HiveServer2 не запущен'
+            }
+            
+            for service, status in service_status.items():
+                print(f"{status}")
+                
+            return all("запущен" in status for status in service_status.values())
+            
+        except Exception as e:
+            print(f"Ошибка при проверке сервисов: {e}")
+            return False
 
-def load_data(spark, filepath):
-    """Загрузить данные из файла"""
-    print(f"Загрузка данных из: {filepath}")
-    
-    # Проверить существование файла
-    if not os.path.exists(filepath):
-        print(f"Ошибка: Файл {filepath} не найден в локальной файловой системе")
-        sys.exit(1)
-    
-    # Явно указать, что файл локальный
-    df = spark.read.csv(f"file://{filepath}", header=True, inferSchema=True)
-    print(f"Количество строк: {df.count()}")
-    return df
+    def start_hive_server(self):
+        """Запустить HiveServer2 если не запущен"""
+        print("\nЗапуск HiveServer2")
+        
+        try:
+            result = subprocess.run(['jps'], capture_output=True, text=True)
+            if 'RunJar' in result.stdout:
+                print("HiveServer2 уже запущен")
+                return True
+                
+            print("Запуск HiveServer2...")
+            process = subprocess.Popen([
+                'hive', '--service', 'hiveserver2'
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            print("Ожидание запуска HiveServer2...")
+            time.sleep(15)
+            
+            result = subprocess.run(['jps'], capture_output=True, text=True)
+            if 'RunJar' in result.stdout:
+                print("HiveServer2 успешно запущен")
+                return True
+            else:
+                print("HiveServer2 не запустился")
+                return False
+                
+        except Exception as e:
+            print(f"Ошибка при запуске HiveServer2: {e}")
+            return False
 
-def clean_and_prepare(df):
-    """Очистка и подготовка данных"""
-    print("\n=== Очистка данных ===")
-    initial_count = df.count()
-    print(f"Исходное количество строк: {initial_count}")
-    
-    # Удалить отмененные заказы (InvoiceNo начинается с 'C')
-    df = df.filter(~col('InvoiceNo').cast('string').startswith('C'))
-    
-    # Удалить строки с отрицательным количеством
-    df = df.filter(col('Quantity') > 0)
-    
-    # Удалить строки без описания товара
-    df = df.filter(col('Description').isNotNull())
-    
-    final_count = df.count()
-    print(f"Количество строк после очистки: {final_count}")
-    print(f"Удалено строк: {initial_count - final_count}")
-    print(f"Уникальных товаров: {df.select('StockCode').distinct().count()}")
-    
-    return df
+    def upload_data_to_hdfs(self):
+        """Загрузить данные в HDFS"""
+        print("\nЗагрузка данных в HDFS")
+        
+        if not os.path.exists(self.local_file):
+            print(f"Файл {self.local_file} не найден")
+            return False
+        
+        print(f"Локальный файл найден: {self.local_file}")
+        
+        try:
+            subprocess.run(['hdfs', 'dfs', '-mkdir', '-p', self.hdfs_output_dir], check=True)
+            print(f"Создана директория HDFS: {self.hdfs_output_dir}")
+            
+            subprocess.run(['hdfs', 'dfs', '-put', '-f', self.local_file, self.hdfs_file_path], check=True)
+            print(f"Файл загружен в HDFS: {self.hdfs_file_path}")
+            
+            result = subprocess.run(
+                ['hdfs', 'dfs', '-ls', self.hdfs_file_path], 
+                capture_output=True, 
+                text=True, 
+                check=True
+            )
+            
+            size_result = subprocess.run(
+                ['hdfs', 'dfs', '-du', '-h', self.hdfs_file_path],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            print(f"Размер файла в HDFS: {size_result.stdout.strip()}")
+            
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"Ошибка при работе с HDFS: {e}")
+            return False
 
-def analyze_sales_by_product(df):
-    """Анализ количества продаж по товарам"""
-    print("\n=== Анализ продаж по товарам ===")
-    
-    # Группировка и агрегация
-    result = df.groupBy('StockCode', 'Description') \
-        .agg(
-            sum('Quantity').alias('TotalQuantity'),
-            count('*').alias('TransactionCount')
-        ) \
-        .orderBy(col('TotalQuantity').desc())
-    
-    return result
+    def run_hive_analysis(self):
+        """Выполнить анализ через Hive CLI"""
+        print("\nЗапуск анализа через Hive")
+        
+        hql_content = """
+CREATE EXTERNAL TABLE IF NOT EXISTS sales_data (
+    InvoiceNo STRING,
+    StockCode STRING,
+    Description STRING,
+    Quantity INT,
+    InvoiceDate STRING,
+    UnitPrice DOUBLE,
+    CustomerID STRING,
+    Country STRING
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+LOCATION '/user/hadoop/output/'
+TBLPROPERTIES ("skip.header.line.count"="1");
+
+SELECT 'Всего записей: ' || COUNT(*) FROM sales_data;
+
+SELECT 
+    StockCode,
+    Description,
+    SUM(Quantity) AS TotalQuantity,
+    COUNT(*) AS TransactionCount,
+    ROUND(AVG(UnitPrice), 2) AS AvgUnitPrice,
+    ROUND(SUM(Quantity * UnitPrice), 2) AS TotalRevenue
+FROM sales_data
+WHERE 
+    NOT STARTSWITH(InvoiceNo, 'C')
+    AND Quantity > 0
+    AND Description IS NOT NULL
+    AND UnitPrice > 0
+GROUP BY StockCode, Description
+ORDER BY TotalQuantity DESC
+LIMIT 10;
+
+CREATE TABLE IF NOT EXISTS top_10_products (
+    StockCode STRING,
+    Description STRING,
+    TotalQuantity INT,
+    TransactionCount INT,
+    AvgUnitPrice DOUBLE,
+    TotalRevenue DOUBLE
+)
+STORED AS ORC;
+
+INSERT OVERWRITE TABLE top_10_products
+SELECT 
+    StockCode,
+    Description,
+    SUM(Quantity) AS TotalQuantity,
+    COUNT(*) AS TransactionCount,
+    ROUND(AVG(UnitPrice), 2) AS AvgUnitPrice,
+    ROUND(SUM(Quantity * UnitPrice), 2) AS TotalRevenue
+FROM sales_data
+WHERE 
+    NOT STARTSWITH(InvoiceNo, 'C')
+    AND Quantity > 0
+    AND Description IS NOT NULL
+    AND UnitPrice > 0
+GROUP BY StockCode, Description
+ORDER BY TotalQuantity DESC
+LIMIT 10;
+
+INSERT OVERWRITE DIRECTORY '/user/hadoop/output/top_products'
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+SELECT * FROM top_10_products;
+"""
+        
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.hql', delete=False) as f:
+                f.write(hql_content)
+                temp_file = f.name
+            
+            print("Временный HQL файл создан")
+            
+            print("Запуск Hive анализа...")
+            result = subprocess.run(
+                ['hive', '-f', temp_file],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            print("Hive анализ выполнен успешно")
+            
+            print("\n" + "="*80)
+            print("РЕЗУЛЬТАТЫ АНАЛИЗА")
+            print("="*80)
+            
+            lines = result.stdout.split('\n')
+            in_results = False
+            results_shown = 0
+            
+            for line in lines:
+                if 'TotalQuantity' in line or results_shown > 0:
+                    if results_shown < 15:
+                        print(line)
+                        results_shown += 1
+                    else:
+                        break
+            
+            os.unlink(temp_file)
+            
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"Ошибка при выполнении Hive анализа: {e}")
+            print(f"Stderr: {e.stderr}")
+            return False
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            return False
+
+    def check_results(self):
+        """Проверить результаты в HDFS"""
+        print("\nПроверка результатов в HDFS")
+        
+        try:
+            result = subprocess.run(
+                ['hdfs', 'dfs', '-ls', '/user/hadoop/output/top_products/'],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                print("Результаты найдены в HDFS:")
+                for line in result.stdout.split('\n'):
+                    if 'part-' in line:
+                        file_info = line.split()
+                        if len(file_info) >= 5:
+                            print(f"Файл: {file_info[-1]}, Размер: {file_info[4]} байт")
+                
+                print("\nСодержимое результатов (первые 10 строк):")
+                cat_result = subprocess.run(
+                    ['hdfs', 'dfs', '-cat', '/user/hadoop/output/top_products/000000_0'],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if cat_result.returncode == 0:
+                    lines = cat_result.stdout.strip().split('\n')
+                    for i, line in enumerate(lines[:10]):
+                        print(f"{i+1}: {line}")
+                else:
+                    print("Не удалось прочитать содержимое файла")
+                    
+                return True
+            else:
+                print("Результаты не найдены в HDFS")
+                return False
+                
+        except Exception as e:
+            print(f"Ошибка при проверке результатов: {e}")
+            return False
+
+    def cleanup(self):
+        """Очистка временных данных"""
+        print("\nОчистка временных данных")
+        
+        try:
+            cleanup_queries = [
+                "DROP TABLE IF EXISTS sales_data;",
+                "DROP TABLE IF EXISTS top_10_products;"
+            ]
+            
+            for query in cleanup_queries:
+                subprocess.run(['hive', '-e', query], capture_output=True)
+            
+            print("Временные таблицы удалены")
+            
+        except Exception as e:
+            print(f"Ошибка при очистке: {e}")
+
+    def run_complete_analysis(self):
+        """Запустить полный анализ"""
+        print("=" * 60)
+        print("АНАЛИЗ ПРОДАЖ: ТОП-10 ТОВАРОВ ПО КОЛИЧЕСТВУ ПРОДАЖ")
+        print("=" * 60)
+        print(f"Время начала: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        try:
+            if not self.check_hadoop_services():
+                print("\nНе все сервисы Hadoop запущены")
+                if not self.start_hive_server():
+                    print("Не удалось запустить HiveServer2")
+                    return False
+            
+            if not self.upload_data_to_hdfs():
+                print("Не удалось загрузить данные в HDFS")
+                return False
+            
+            if not self.run_hive_analysis():
+                print("Не удалось выполнить анализ в Hive")
+                return False
+            
+            if not self.check_results():
+                print("Результаты не найдены или повреждены")
+                return False
+            
+            print("\nАНАЛИЗ УСПЕШНО ЗАВЕРШЕН")
+            print("\nРезультаты:")
+            print("Исходные данные загружены в: /user/hadoop/output/myfile.csv")
+            print("Топ-10 товаров сохранены в: /user/hadoop/output/top_products/")
+            print("Для просмотра результатов выполните:")
+            print("hdfs dfs -cat /user/hadoop/output/top_products/000000_0")
+            
+            return True
+            
+        except Exception as e:
+            print(f"Критическая ошибка: {e}")
+            return False
 
 def main():
-    # Путь к данным
-    data_file = '/opt/data/myfile.csv'
+    analyzer = HiveSalesAnalysis()
     
-    # Создать Spark сессию
-    spark = create_spark_session()
+    success = analyzer.run_complete_analysis()
     
-    print("=== Анализ данных продаж с использованием PySpark ===")
-    print(f"Анализируем файл: {data_file}")
-    
-    # Показать конфигурацию
-    print("\n=== Конфигурация Spark ===")
-    print(f"Version: {spark.version}")
-    print(f"Master: {spark.sparkContext.master}")
-    
-    # Загрузить данные
-    df = load_data(spark, data_file)
-    
-    # Показать схему и первые строки
-    print("\n=== Схема данных ===")
-    df.printSchema()
-    print("\nПервые 5 строк:")
-    df.show(5, truncate=False)
-    
-    # Очистка данных
-    df_clean = clean_and_prepare(df)
-    
-    # Анализ
-    result = analyze_sales_by_product(df_clean)
-    
-    # Показать результаты
-    print("\n=== Результаты ===")
-    print("\nТоп-10 товаров по количеству продаж:")
-    result.show(10, truncate=False)
-    
-    # Сохранить результаты ТОЛЬКО в HDFS
-    output_path = "hdfs://hadoop:9000/user/hadoop/output/top_products"
-    
-    result.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
-    print(f"\nРезультаты сохранены в HDFS: {output_path}")
-    
-    spark.stop()
+    if success:
+        print(f"\nАнализ завершен успешно!")
+        print(f"Время окончания: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        sys.exit(0)
+    else:
+        print(f"\nАнализ завершен с ошибками")
+        print(f"Время окончания: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
