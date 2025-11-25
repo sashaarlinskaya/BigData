@@ -1,9 +1,78 @@
-# 1. Загрузка необходимых библиотек
+%pip install hdfs
+!pwd
+-------------------------
+import os
+import subprocess
+import pandas as pd
+
+# Загрузка данных из HDFS
+print("Загрузка данных из HDFS...")
+
+# Путь к данным в HDFS (правильный путь)
+hdfs_path = "/user/hadoop/input/myfile.csv"
+local_path = "/opt/myfile.csv"
+
+# Скачиваем файл из HDFS
+try:
+    # Команда для скачивания из HDFS
+    hdfs_download_cmd = f"hdfs dfs -get {hdfs_path} {local_path}"
+    print(f"Выполнение команды: {hdfs_download_cmd}")
+    
+    # Задаем JAVA_HOME, так как Jupyter может его не видеть
+    env = dict(os.environ, **{'JAVA_HOME': '/usr/lib/jvm/java-11-openjdk-amd64'})
+    result = subprocess.run(hdfs_download_cmd, shell=True, capture_output=True, text=True, cwd="/opt", env=env)
+    
+    if result.returncode == 0:
+        print(f"Данные успешно загружены из HDFS: {hdfs_path}")
+    else:
+        print(f"Ошибка при загрузке из HDFS: {result.stderr}")
+        print("Попытка найти файл локально...")
+        local_path = "/opt/data/myfile.csv"
+        
+    # Проверяем наличие файла
+    if not os.path.exists(local_path):
+        print(f"Файл не найден в {local_path}. Используем альтернативный путь...")
+        local_path = "myfile.csv"
+        
+except Exception as e:
+    print(f"Ошибка при выполнении subprocess: {e}")
+    print("Попытка использовать локальный файл...")
+    local_path = "/opt/data/myfile.csv"
+
+# Проверяем наличие файла перед загрузкой
+if not os.path.exists(local_path):
+    print("Файл не найден. Пробуем последний вариант...")
+    local_path = "myfile.csv"
+
+# Финальная проверка и загрузка данных
+if os.path.exists(local_path):
+    df = pd.read_csv(local_path, low_memory=False)
+    print(f"Размер датасета: {df.shape}")
+    print(f"Данные успешно загружены из {local_path}")
+    print(df.head())
+else:
+    print(f"ОШИБКА: Файл myfile.csv не найден!")
+    print(f"Искали по следующим путям:")
+    print(f"  - /opt/myfile.csv (из HDFS)")
+    print(f"  - /opt/data/myfile.csv (локальный)")
+    print(f"  - myfile.csv (в текущей директории)")
+    df = pd.DataFrame()  # Создаем пустой DataFrame чтобы не было ошибки
+
+
+
+
+
+
+
+
+
+
+
+------------------------------
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime
 import subprocess
 import os
 
@@ -15,7 +84,7 @@ sns.set_palette("husl")
 # Увеличение размера графиков
 plt.rcParams['figure.figsize'] = (12, 8)
 
-# 2. Загрузка данных
+# Загрузка данных
 print("Загрузка данных о продажах...")
 data_file = '/opt/data/myfile.csv'
 
@@ -28,186 +97,36 @@ else:
     print(f"ОШИБКА: Файл {data_file} не найден!")
     df = pd.DataFrame()
 
-# 3. Предварительный анализ данных
-if not df.empty:
-    print("\nИнформация о данных:")
-    print(df.info())
-    print("\nПервые 5 строк:")
-    print(df.head())
-    print("\nОсновная статистика:")
-    print(df.describe())
 
-# 4. Очистка и подготовка данных
+    ---------------------------------------
+
+    # Очистка данных
 df_clean = df.copy()
 
-if not df_clean.empty:
-    # Удаляем отмененные заказы (InvoiceNo начинается с 'c')
-    df_clean = df_clean[~df_clean['InvoiceNo'].astype(str).str.startswith('C', na=False)]
-    
-    # Удаляем возвраты (отрицательное количество)
-    df_clean = df_clean[df_clean['Quantity'] > 0]
-    
-    # Удаляем строки с пропущенными Description (названиями товаров)
-    df_clean = df_clean.dropna(subset=['Description'])
-    
-    # Преобразуем Quantity в числовой формат и удаляем аномалии
-    df_clean['Quantity'] = pd.to_numeric(df_clean['Quantity'], errors='coerce')
-    df_clean = df_clean.dropna(subset=['Quantity'])
-    
-    # Удаляем возможные выбросы (очень большие количества)
-    Q1 = df_clean['Quantity'].quantile(0.25)
-    Q3 = df_clean['Quantity'].quantile(0.75)
-    IQR = Q3 - Q1
-    lower_bound = Q1 - 1.5 * IQR
-    upper_bound = Q3 + 1.5 * IQR
-    df_clean = df_clean[(df_clean['Quantity'] >= lower_bound) & (df_clean['Quantity'] <= upper_bound)]
-    
-    print(f"\nКоличество строк после очистки: {len(df_clean)}")
-    print(f"Количество уникальных товаров: {df_clean['Description'].nunique()}")
+# Удаляем отмененные заказы (InvoiceNo начинается с 'c')
+df_clean = df_clean[~df_clean['InvoiceNo'].astype(str).str.startswith('C', na=False)]
 
-# 5. Анализ топ-10 товаров по количеству продаж
-if not df_clean.empty:
-    # Группируем по названию товара и суммируем количество продаж
-    top_products = df_clean.groupby('Description')['Quantity'].agg(['sum', 'count']).reset_index()
-    top_products.columns = ['Product', 'Total_Quantity', 'Transaction_Count']
-    top_products = top_products.sort_values('Total_Quantity', ascending=False)
-    
-    # Берем топ-10 товаров
-    top_10_products = top_products.head(10)
-    
-    print("\nТоп-10 товаров по количеству продаж:")
-    print(top_10_products.to_string(index=False))
+# Удаляем возвраты (отрицательное количество)
+df_clean = df_clean[df_clean['Quantity'] > 0]
 
-# 6. Визуализация результатов
-if not top_10_products.empty:
-    # Создаем фигуру с двумя субплогами
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
-    
-    # График 1: Топ-10 товаров по общему количеству
-    products = top_10_products['Product']
-    quantities = top_10_products['Total_Quantity']
-    
-    bars = ax1.barh(range(len(products)), quantities)
-    ax1.set_yticks(range(len(products)))
-    ax1.set_yticklabels(products, fontsize=10)
-    ax1.set_xlabel('Общее количество продаж')
-    ax1.set_title('Топ-10 товаров по количеству продаж')
-    ax1.invert_yaxis()  # Чтобы товар с наибольшими продажами был сверху
-    
-    # Добавляем значения на столбцы
-    for i, bar in enumerate(bars):
-        width = bar.get_width()
-        ax1.text(width + width*0.01, bar.get_y() + bar.get_height()/2, 
-                f'{int(width):,}', ha='left', va='center', fontsize=9)
-    
-    # График 2: Топ-10 товаров по количеству транзакций
-    top_by_transactions = top_products.sort_values('Transaction_Count', ascending=False).head(10)
-    ax2.barh(range(len(top_by_transactions)), top_by_transactions['Transaction_Count'])
-    ax2.set_yticks(range(len(top_by_transactions)))
-    ax2.set_yticklabels(top_by_transactions['Product'], fontsize=10)
-    ax2.set_xlabel('Количество транзакций')
-    ax2.set_title('Топ-10 товаров по количеству транзакций')
-    ax2.invert_yaxis()
-    
-    plt.tight_layout()
-    plt.show()
+# Удаляем строки с пропущенными Description (названиями товаров)
+df_clean = df_clean.dropna(subset=['Description'])
 
-# 7. Детальный анализ топ-10 товаров
-if not top_10_products.empty:
-    print("\n" + "="*80)
-    print("ДЕТАЛЬНЫЙ АНАЛИЗ ТОП-10 ТОВАРОВ")
-    print("="*80)
-    
-    for i, row in top_10_products.iterrows():
-        product_data = df_clean[df_clean['Description'] == row['Product']]
-        
-        print(f"\n{i+1}. {row['Product']}")
-        print(f"   Общее количество продаж: {row['Total_Quantity']:,}")
-        print(f"   Количество транзакций: {row['Transaction_Count']}")
-        print(f"   Среднее количество за транзакцию: {row['Total_Quantity']/row['Transaction_Count']:.1f}")
-        
-        if 'UnitPrice' in product_data.columns:
-            avg_price = product_data['UnitPrice'].mean()
-            print(f"   Средняя цена: £{avg_price:.2f}")
-            total_revenue = (product_data['Quantity'] * product_data['UnitPrice']).sum()
-            print(f"   Общая выручка: £{total_revenue:,.2f}")
+# Преобразуем Quantity в числовой формат и удаляем пропуски
+df_clean['Quantity'] = pd.to_numeric(df_clean['Quantity'], errors='coerce')
+df_clean = df_clean.dropna(subset=['Quantity'])
 
-# 8. Дополнительная статистика
-if not df_clean.empty:
-    print(f"\n" + "="*50)
-    print("ОБЩАЯ СТАТИСТИКА ПО ПРОДАЖАМ")
-    print("="*50)
-    print(f"Всего уникальных товаров: {df_clean['Description'].nunique():,}")
-    print(f"Общее количество проданных единиц: {df_clean['Quantity'].sum():,}")
-    print(f"Общее количество транзакций: {df_clean['InvoiceNo'].nunique():,}")
-    print(f"Среднее количество товаров в транзакции: {df_clean.groupby('InvoiceNo')['Quantity'].sum().mean():.1f}")
-    
-    if 'UnitPrice' in df_clean.columns:
-        total_revenue = (df_clean['Quantity'] * df_clean['UnitPrice']).sum()
-        print(f"Общая выручка: £{total_revenue:,.2f}")
+# Удаляем возможные выбросы (очень большие количества)
+Q1 = df_clean['Quantity'].quantile(0.25)
+Q3 = df_clean['Quantity'].quantile(0.75)
+IQR = Q3 - Q1
+lower_bound = Q1 - 1.5 * IQR
+upper_bound = Q3 + 1.5 * IQR
+df_clean = df_clean[(df_clean['Quantity'] >= lower_bound) & (df_clean['Quantity'] <= upper_bound)]
 
-# 9. Анализ по странам для топ-товаров
-if not top_10_products.empty and 'Country' in df_clean.columns:
-    print(f"\n" + "="*50)
-    print("РАСПРЕДЕЛЕНИЕ ТОП-ТОВАРОВ ПО СТРАНАМ")
-    print("="*50)
-    
-    top_product_names = top_10_products['Product'].tolist()
-    
-    for product in top_product_names[:3]:  # Покажем для первых 3 товаров
-        product_country_data = df_clean[df_clean['Description'] == product].groupby('Country')['Quantity'].sum()
-        top_countries = product_country_data.sort_values(ascending=False).head(5)
-        
-        print(f"\n{product}:")
-        for country, quantity in top_countries.items():
-            print(f"   {country}: {quantity:,} ед.")
+print(f"Количество строк после очистки: {len(df_clean)}")
+print(f"Количество уникальных товаров: {df_clean['Description'].nunique()}")
+print(f"Топ-5 самых продаваемых товаров:")
+print(df_clean['Description'].value_counts().head())
 
-# 10. Временной анализ (если есть данные о датах)
-if not df_clean.empty and 'InvoiceDate' in df_clean.columns:
-    try:
-        # Преобразуем дату в datetime формат
-        df_clean['InvoiceDate'] = pd.to_datetime(df_clean['InvoiceDate'])
-        
-        # Анализ продаж по месяцам
-        df_clean['month'] = df_clean['InvoiceDate'].dt.to_period('M')
-        monthly_sales = df_clean.groupby('month')['Quantity'].sum().reset_index()
-        monthly_sales['month'] = monthly_sales['month'].astype(str)
-        
-        plt.figure(figsize=(12, 6))
-        plt.plot(monthly_sales['month'], monthly_sales['Quantity'], marker='o', linewidth=2, markersize=6)
-        plt.xlabel('Месяц')
-        plt.ylabel('Количество продаж')
-        plt.title('Динамика продаж по месяцам')
-        plt.xticks(rotation=45)
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()
-        
-        print(f"\nДинамика продаж по месяцам:")
-        print(monthly_sales.to_string(index=False))
-        
-    except Exception as e:
-        print(f"Не удалось проанализировать временные тенденции: {e}")
-
-# 11. Сохранение результатов
-if not top_10_products.empty:
-    # Сохраняем результаты в локальный файл
-    results_path = "/opt/data/top_10_products_analysis.csv"
-    top_10_products.to_csv(results_path, index=False)
-    print(f"\nРезультаты сохранены в: {results_path}")
-    
-    # Пытаемся сохранить в HDFS
-    try:
-        hdfs_results_path = "/user/hadoop/results/top_10_products.csv"
-        hdfs_upload_cmd = f"hdfs dfs -put -f {results_path} {hdfs_results_path}"
-        result = subprocess.run(hdfs_upload_cmd, shell=True, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print(f"Результаты также сохранены в HDFS: {hdfs_results_path}")
-        else:
-            print(f"Не удалось сохранить в HDFS: {result.stderr}")
-            
-    except Exception as e:
-        print(f"Ошибка при сохранении в HDFS: {e}")
-
-print("\nАнализ завершен!")
+# Продолжение анализа...
