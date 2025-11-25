@@ -1,187 +1,111 @@
 #!/usr/bin/env python3
 """
-Анализ продаж товаров из файла myfile.csv
+Анализ данных продаж с использованием PySpark
 Задача: найти топ-10 товаров по количеству продаж
 """
-import pandas as pd
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, sum, count, desc
+import sys
 import os
 
-def load_data(filepath):
-    """Загрузить данные из CSV файла"""
-    df = pd.read_csv(filepath)
-    print(f"Загружено строк: {len(df)}")
+def create_spark_session():
+    """Создать Spark сессию"""
+    spark = SparkSession.builder \
+        .appName("Sales Analysis") \
+        .master("local[*]") \
+        .config("spark.driver.memory", "2g") \
+        .config("spark.executor.memory", "2g") \
+        .getOrCreate()
+    return spark
+
+def load_data(spark, filepath):
+    """Загрузить данные из файла"""
+    print(f"Загрузка данных из: {filepath}")
+    
+    df = spark.read.csv(filepath, header=True, inferSchema=True)
+    print(f"Количество строк: {df.count()}")
     return df
 
-def clean_data(df):
+def clean_and_prepare(df):
     """Очистка и подготовка данных"""
     print("\n=== Очистка данных ===")
-    print(f"Исходное количество строк: {len(df)}")
+    print(f"Исходное количество строк: {df.count()}")
     
-    # Создаем копию данных
-    df_clean = df.copy()
+    # Удалить отмененные заказы (InvoiceNo начинается с 'C')
+    df = df.filter(~col('InvoiceNo').startswith('C'))
     
-    # Удаляем отмененные заказы (InvoiceNo начинается с 'C')
-    df_clean = df_clean[~df_clean['InvoiceNo'].astype(str).str.startswith('C', na=False)]
+    # Удалить строки с отрицательным количеством
+    df = df.filter(col('Quantity') > 0)
     
-    # Удаляем возвраты (отрицательное количество)
-    df_clean = df_clean[df_clean['Quantity'] > 0]
+    # Удалить строки без описания товара
+    df = df.filter(col('Description').isNotNull())
     
-    # Удаляем строки без описания товара
-    df_clean = df_clean[df_clean['Description'].notna()]
+    print(f"Количество строк после очистки: {df.count()}")
+    print(f"Уникальных товаров: {df.select('StockCode').distinct().count()}")
     
-    # Удаляем товары с нулевой или отрицательной ценой
-    df_clean = df_clean[df_clean['UnitPrice'] > 0]
-    
-    print(f"Количество строк после очистки: {len(df_clean)}")
-    print(f"Уникальных товаров: {df_clean['StockCode'].nunique()}")
-    
-    return df_clean
+    return df
 
-def find_top_10_products(df):
-    """Найти топ-10 товаров по количеству продаж"""
-    print("\n=== Поиск топ-10 товаров по количеству продаж ===")
+def analyze_sales_by_product(df):
+    """Анализ количества продаж по товарам"""
+    print("\n=== Анализ продаж по товарам ===")
     
-    # Группируем по товару и суммируем количество
-    product_sales = df.groupby(['StockCode', 'Description']).agg({
-        'Quantity': 'sum',
-        'UnitPrice': 'mean',
-        'InvoiceNo': 'nunique',  # количество транзакций
-        'CustomerID': 'nunique'   # количество уникальных клиентов
-    }).reset_index()
+    # Группировка и агрегация
+    result = df.groupBy('StockCode', 'Description') \
+        .agg(
+            sum('Quantity').alias('TotalQuantity'),
+            count('*').alias('TransactionCount')
+        ) \
+        .orderBy(col('TotalQuantity').desc())
     
-    # Переименовываем колонки
-    product_sales.columns = ['StockCode', 'Description', 'TotalQuantity', 'AvgUnitPrice', 'TransactionCount', 'UniqueCustomers']
-    
-    # Вычисляем общую выручку
-    product_sales['TotalRevenue'] = product_sales['TotalQuantity'] * product_sales['AvgUnitPrice']
-    
-    # Сортируем по количеству продаж (по убыванию) и берем топ-10
-    top_10_products = product_sales.sort_values('TotalQuantity', ascending=False).head(10)
-    
-    return top_10_products
-
-def display_results(top_10_df):
-    """Вывод результатов анализа"""
-    print("\n" + "="*80)
-    print("ТОП-10 ТОВАРОВ ПО КОЛИЧЕСТВУ ПРОДАЖ")
-    print("="*80)
-    
-    # Создаем красивую таблицу для вывода
-    display_table = top_10_df[['StockCode', 'Description', 'TotalQuantity', 'TransactionCount', 'TotalRevenue']].copy()
-    
-    # Форматируем числовые колонки
-    display_table['TotalQuantity'] = display_table['TotalQuantity'].astype(int)
-    display_table['TransactionCount'] = display_table['TransactionCount'].astype(int)
-    display_table['TotalRevenue'] = display_table['TotalRevenue'].round(2)
-    
-    # Переименовываем колонки для красивого вывода
-    display_table = display_table.rename(columns={
-        'StockCode': 'Код товара',
-        'Description': 'Описание товара',
-        'TotalQuantity': 'Кол-во продаж',
-        'TransactionCount': 'Кол-во транзакций',
-        'TotalRevenue': 'Общая выручка (£)'
-    })
-    
-    print(f"\n{display_table.to_string(index=False, max_colwidth=40)}")
-    
-    # Детальная информация о топ-1 товаре
-    top_product = top_10_df.iloc[0]
-    print(f"\n" + "="*50)
-    print("САМЫЙ ПРОДАВАЕМЫЙ ТОВАР")
-    print("="*50)
-    print(f"Код товара: {top_product['StockCode']}")
-    print(f"Описание: {top_product['Description']}")
-    print(f"Общее количество продаж: {int(top_product['TotalQuantity']):,}")
-    print(f"Количество транзакций: {int(top_product['TransactionCount']):,}")
-    print(f"Средняя цена: £{top_product['AvgUnitPrice']:.2f}")
-    print(f"Общая выручка: £{top_product['TotalRevenue']:,.2f}")
-    print(f"Уникальных клиентов: {int(top_product['UniqueCustomers']):,}")
-
-def additional_stats(df, top_10_df):
-    """Дополнительная статистика"""
-    print("\n" + "="*50)
-    print("ОБЩАЯ СТАТИСТИКА")
-    print("="*50)
-    
-    total_sales = df['Quantity'].sum()
-    total_revenue = (df['Quantity'] * df['UnitPrice']).sum()
-    top_10_sales = top_10_df['TotalQuantity'].sum()
-    
-    print(f"Всего уникальных товаров: {df['StockCode'].nunique():,}")
-    print(f"Общее количество продаж: {total_sales:,}")
-    print(f"Общая выручка: £{total_revenue:,.2f}")
-    print(f"Количество транзакций: {df['InvoiceNo'].nunique():,}")
-    print(f"Количество клиентов: {df['CustomerID'].nunique():,}")
-    
-    # Доля топ-10 товаров в общих продажах
-    percentage = (top_10_sales / total_sales) * 100
-    print(f"\nТоп-10 товаров составляют: {percentage:.1f}% от всех продаж")
-    print(f"Продажи топ-10: {top_10_sales:,} из {total_sales:,}")
-
-def save_to_csv(top_10_df, filename='top_10_products.csv'):
-    """Сохранить результаты в CSV файл"""
-    # Создаем директорию results если ее нет
-    os.makedirs('results', exist_ok=True)
-    
-    filepath = f'results/{filename}'
-    top_10_df.to_csv(filepath, index=False)
-    print(f"\nРезультаты сохранены в: {filepath}")
+    return result
 
 def main():
-    # Путь к файлу данных
+    # Путь к данным
     data_file = '/opt/data/myfile.csv'
     
-    if not os.path.exists(data_file):
-        print(f"Ошибка: Файл {data_file} не найден!")
-        return
+    # Создать Spark сессию
+    spark = create_spark_session()
     
-    print("=== АНАЛИЗ ПРОДАЖ ТОВАРОВ ===")
-    print(f"Анализируем файл: {data_file}")
+    print("=== Анализ данных продаж с использованием PySpark ===")
     
-    # 1. Загрузка данных
-    df = load_data(data_file)
+    # Показать конфигурацию
+    print("\n=== Конфигурация Spark ===")
+    print(f"Version: {spark.version}")
+    print(f"Master: {spark.sparkContext.master}")
     
-    # 2. Очистка данных
-    df_clean = clean_data(df)
+    # Загрузить данные
+    df = load_data(spark, data_file)
     
-    # 3. Поиск топ-10 товаров
-    top_10_products = find_top_10_products(df_clean)
+    # Показать схему и первые строки
+    print("\n=== Схема данных ===")
+    df.printSchema()
+    print("\nПервые 5 строк:")
+    df.show(5)
     
-    # 4. Вывод результатов
-    display_results(top_10_products)
+    # Очистка данных
+    df_clean = clean_and_prepare(df)
     
-    # 5. Дополнительная статистика
-    additional_stats(df_clean, top_10_products)
+    # Анализ
+    result = analyze_sales_by_product(df_clean)
     
-    # 6. Сохранение результатов
-    save_to_csv(top_10_products)
+    # Показать результаты
+    print("\n=== Результаты ===")
+    print("\nТоп-10 товаров по количеству продаж:")
+    result.show(10, truncate=False)
     
-    print("\n=== Анализ завершен ===")
-
-# Альтернативная простая версия (если нужен только топ-10)
-def simple_top_10_analysis():
-    """Простая версия анализа - только топ-10 товаров"""
-    df = pd.read_csv('myfile.csv')
+    # Найти самый продаваемый товар
+    top_row = result.first()
+    print(f"\nСамый продаваемый товар: '{top_row['Description']}'")
+    print(f"Код товара: {top_row['StockCode']}")
+    print(f"Общее количество продаж: {int(top_row['TotalQuantity'])}")
+    print(f"Количество транзакций: {int(top_row['TransactionCount'])}")
     
-    # Удаляем отмененные заказы и возвраты
-    df = df[~df['InvoiceNo'].astype(str).str.startswith('C', na=False)]
-    df = df[df['Quantity'] > 0]
+    # Сохранить результаты
+    output_path = "results/top_products_spark"
+    result.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
+    print(f"\nРезультаты сохранены в: {output_path}")
     
-    # Группируем и считаем сумму продаж
-    top_10 = (df.groupby(['StockCode', 'Description'])['Quantity']
-              .sum()
-              .reset_index()
-              .sort_values('Quantity', ascending=False)
-              .head(10))
-    
-    print("Топ-10 товаров по количеству продаж:")
-    print(top_10.to_string(index=False))
-    
-    return top_10
+    spark.stop()
 
 if __name__ == '__main__':
     main()
-    
-    # Если нужна простая версия, раскомментируйте:
-    # simple_top_10_analysis()
