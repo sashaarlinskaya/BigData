@@ -1,28 +1,44 @@
-# Очистка данных
-df_clean = df.copy()
+import io
+import os
+import matplotlib.pyplot as plt
 
-# Удаляем отмененные заказы (где InvoiceNo начинается с 'C')
-df_clean = df_clean[~df_clean['InvoiceNo'].astype(str).str.startswith('C', na=False)]
+# --- 1. код для построения графика ---
+plt.figure(figsize=(12, 8))
+plt.barh(top_10_products['Description'], top_10_products['Quantity'])
+plt.xlabel('Количество продаж')
+plt.ylabel('Товар')
+plt.title('Топ-10 товаров по количеству продаж')
+plt.gca().invert_yaxis()  # Чтобы товар с наибольшими продажами был сверху
+plt.tight_layout()
 
-# Удаляем возвраты (отрицательные Quantity)
-df_clean = df_clean[df_clean['Quantity'] > 0]
+# --- 2. Сохранение графика локально ---
+local_plot_path = '/opt/notebooks/top_10_products.png'
+plt.savefig(local_plot_path, format='png', dpi=300)
+print(f"График сохранен локально: {local_plot_path}")
 
-# Удаляем строки с пропущенными Description
-df_clean = df_clean[df_clean['Description'].notna()]
+# Показываем график
+plt.show()
 
-# Преобразуем Quantity в числовой формат
-df_clean['Quantity'] = pd.to_numeric(df_clean['Quantity'], errors='coerce')
-df_clean = df_clean.dropna(subset=['Quantity'])
+# --- 3. Сохранение данных топ-10 товаров в CSV локально ---
+local_csv_path = '/opt/notebooks/top_10_products.csv'
+top_10_products.to_csv(local_csv_path, index=False)
+print(f"Данные топ-10 товаров сохранены локально: {local_csv_path}")
 
-# Находим топ-10 товаров по количеству продаж
-top_10_products = df_clean.groupby('Description')['Quantity'].sum().reset_index()
-top_10_products = top_10_products.sort_values('Quantity', ascending=False).head(10)
+# --- 4. Сохранение полной статистики в текстовый файл ---
+stats_path = '/opt/notebooks/sales_statistics.txt'
+with open(stats_path, 'w', encoding='utf-8') as f:
+    f.write("СТАТИСТИКА ПРОДАЖ\n")
+    f.write("=" * 50 + "\n")
+    f.write(f"Всего уникальных товаров: {df_clean['Description'].nunique()}\n")
+    f.write(f"Общее количество проданных единиц: {df_clean['Quantity'].sum():,}\n")
+    f.write(f"Среднее количество продаж на товар: {df_clean.groupby('Description')['Quantity'].sum().mean():.1f}\n")
+    f.write("\nТОП-10 ТОВАРОВ ПО ПРОДАЖАМ:\n")
+    f.write("=" * 50 + "\n")
+    for i, row in top_10_products.iterrows():
+        f.write(f"{i+1}. {row['Description']}: {row['Quantity']:,} ед.\n")
 
-print("Топ-10 товаров по количеству продаж:")
-print(top_10_products.to_string(index=False))
+print(f"Статистика сохранена локально: {stats_path}")
 
-# Дополнительная статистика
-print(f"\nОбщая статистика:")
-print(f"Всего уникальных товаров: {df_clean['Description'].nunique()}")
-print(f"Общее количество проданных единиц: {df_clean['Quantity'].sum():,}")
-print(f"Среднее количество продаж на товар: {df_clean.groupby('Description')['Quantity'].sum().mean():.1f}")
+# --- 5. Проверка сохраненных файлов ---
+print("\nСохраненные файлы:")
+!ls -la /opt/notebooks/*.png /opt/notebooks/*.csv /opt/notebooks/*.txt 2>/dev/null || echo "Файлы не найдены"
