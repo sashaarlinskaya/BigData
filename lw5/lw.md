@@ -20,9 +20,6 @@
 получить практические навыки развертывания одноузлового кластера Hadoop, освоить базовые операции с распределенной файловой системой HDFS, выполнить загрузку и простейшую обработку данных, а также научиться
 выгружать результаты для последующего анализа и визуализации во внешней среде (Jupyter Notebook / Google Colab).
 
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue)]()
-[![Hadoop](https://img.shields.io/badge/Hadoop-3.3.4-green)]()
-[![Python](https://img.shields.io/badge/Python-3.8+-blue)]()
 
 
 **Аналитическая задача.** Найти топ-10 товаров по количеству продаж (вариант 3).
@@ -75,7 +72,7 @@
 
 ```bash
 
-# Убедиться, что файлы на месте
+# Убедились, что файлы на месте
 ls -la hadoop/
 ls -la scripts/
 ls -la notebooks/
@@ -141,6 +138,7 @@ hdfs dfs -mkdir -p /user/hadoop/output
 # Проверить созданные директории
 hdfs dfs -ls /user/hadoop/
 ```
+<img width="912" height="267" alt="image" src="https://github.com/user-attachments/assets/c61e26e9-46b0-4e4f-92f8-7c5d163796ce" />
 
 
 ### Шаг 2. Загрузили данные
