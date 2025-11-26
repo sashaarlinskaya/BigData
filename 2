@@ -1,44 +1,100 @@
 import io
 import os
 import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
 
-# --- 1. код для построения графика ---
-plt.figure(figsize=(12, 8))
-plt.barh(top_10_products['Description'], top_10_products['Quantity'])
-plt.xlabel('Количество продаж')
-plt.ylabel('Товар')
-plt.title('Топ-10 товаров по количеству продаж')
-plt.gca().invert_yaxis()  # Чтобы товар с наибольшими продажами был сверху
+# --- 1. Подготовка данных для визуализации ---
+# Добавим среднюю цену для каждого товара как дополнительную характеристику
+if 'UnitPrice' in df_clean.columns:
+    product_prices = df_clean.groupby('Description')['UnitPrice'].mean().reset_index()
+    top_10_with_prices = top_10_products.merge(product_prices, on='Description', how='left')
+    
+    # Создаем категории цен для цветового кодирования
+    top_10_with_prices['Price_Category'] = pd.cut(top_10_with_prices['UnitPrice'], 
+                                                 bins=3, 
+                                                 labels=['Низкая', 'Средняя', 'Высокая'])
+else:
+    # Если цены нет, используем количество транзакций как дополнительную характеристику
+    product_transactions = df_clean.groupby('Description')['InvoiceNo'].nunique().reset_index()
+    product_transactions.columns = ['Description', 'Transaction_Count']
+    top_10_with_prices = top_10_products.merge(product_transactions, on='Description', how='left')
+    
+    # Создаем категории по количеству транзакций
+    top_10_with_prices['Transaction_Category'] = pd.cut(top_10_with_prices['Transaction_Count'], 
+                                                       bins=3, 
+                                                       labels=['Мало транзакций', 'Среднее', 'Много транзакций'])
+
+# --- 2. Построение графика с помощью Seaborn ---
+plt.figure(figsize=(14, 10))
+
+if 'UnitPrice' in df_clean.columns:
+    # График с цветовым кодированием по цене
+    sns.barplot(data=top_10_with_prices, 
+                y='Description', 
+                x='Quantity', 
+                hue='Price_Category',
+                palette='viridis',
+                dodge=False)
+    plt.title('Топ-10 товаров по количеству продаж (цвет показывает ценовую категорию)', fontsize=14, pad=20)
+else:
+    # График с цветовым кодированием по количеству транзакций
+    sns.barplot(data=top_10_with_prices, 
+                y='Description', 
+                x='Quantity', 
+                hue='Transaction_Category',
+                palette='rocket',
+                dodge=False)
+    plt.title('Топ-10 товаров по количеству продаж (цвет показывает количество транзакций)', fontsize=14, pad=20)
+
+plt.xlabel('Количество продаж', fontsize=12)
+plt.ylabel('Товар', fontsize=12)
+plt.legend(title='Категория', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+# Добавляем значения на столбцы
+for i, (index, row) in enumerate(top_10_with_prices.iterrows()):
+    plt.text(row['Quantity'] + row['Quantity'] * 0.01, i, 
+             f'{int(row["Quantity"]):,}', 
+             va='center', 
+             fontsize=10,
+             fontweight='bold')
+
 plt.tight_layout()
 
-# --- 2. Сохранение графика локально ---
-local_plot_path = '/opt/notebooks/top_10_products.png'
-plt.savefig(local_plot_path, format='png', dpi=300)
+# --- 3. Сохранение графика локально ---
+save_directory = "/home/devops/Downloads/BigDataAnalitic-main/1w/2025/lw_5_1/notebooks"
+
+# Создаем директорию, если она не существует
+os.makedirs(save_directory, exist_ok=True)
+
+local_plot_path = os.path.join(save_directory, 'top_10_products_seaborn.png')
+plt.savefig(local_plot_path, format='png', dpi=300, bbox_inches='tight')
 print(f"График сохранен локально: {local_plot_path}")
 
 # Показываем график
 plt.show()
 
-# --- 3. Сохранение данных топ-10 товаров в CSV локально ---
-local_csv_path = '/opt/notebooks/top_10_products.csv'
-top_10_products.to_csv(local_csv_path, index=False)
+# --- 4. Сохранение данных топ-10 товаров в CSV ---
+local_csv_path = os.path.join(save_directory, 'top_10_products.csv')
+top_10_products.to_csv(local_csv_path, index=False, encoding='utf-8')
 print(f"Данные топ-10 товаров сохранены локально: {local_csv_path}")
 
-# --- 4. Сохранение полной статистики в текстовый файл ---
-stats_path = '/opt/notebooks/sales_statistics.txt'
-with open(stats_path, 'w', encoding='utf-8') as f:
-    f.write("СТАТИСТИКА ПРОДАЖ\n")
-    f.write("=" * 50 + "\n")
-    f.write(f"Всего уникальных товаров: {df_clean['Description'].nunique()}\n")
-    f.write(f"Общее количество проданных единиц: {df_clean['Quantity'].sum():,}\n")
-    f.write(f"Среднее количество продаж на товар: {df_clean.groupby('Description')['Quantity'].sum().mean():.1f}\n")
-    f.write("\nТОП-10 ТОВАРОВ ПО ПРОДАЖАМ:\n")
-    f.write("=" * 50 + "\n")
-    for i, row in top_10_products.iterrows():
-        f.write(f"{i+1}. {row['Description']}: {row['Quantity']:,} ед.\n")
+# --- 5. Сохранение расширенных данных с дополнительными характеристиками ---
+if 'UnitPrice' in df_clean.columns:
+    extended_data_path = os.path.join(save_directory, 'top_10_products_extended.csv')
+    top_10_with_prices.to_csv(extended_data_path, index=False, encoding='utf-8')
+    print(f"Расширенные данные сохранены локально: {extended_data_path}")
 
-print(f"Статистика сохранена локально: {stats_path}")
-
-# --- 5. Проверка сохраненных файлов ---
+# --- 6. Проверка сохраненных файлов ---
 print("\nСохраненные файлы:")
-!ls -la /opt/notebooks/*.png /opt/notebooks/*.csv /opt/notebooks/*.txt 2>/dev/null || echo "Файлы не найдены"
+import glob
+saved_files = glob.glob(os.path.join(save_directory, '*'))
+for file in saved_files:
+    file_size = os.path.getsize(file) / 1024  # размер в KB
+    print(f"  - {os.path.basename(file)} ({file_size:.1f} KB)")
+
+# --- 7. Дополнительная информация о данных ---
+print(f"\nДополнительная информация:")
+print(f"Всего уникальных товаров: {df_clean['Description'].nunique()}")
+print(f"Общее количество проданных единиц: {df_clean['Quantity'].sum():,}")
+print(f"Топ-1 товар: {top_10_products.iloc[0]['Description']} - {top_10_products.iloc[0]['Quantity']:,} ед.")
